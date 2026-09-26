@@ -1,12 +1,18 @@
 import axios from "axios";
 import { tokenStorage } from "./auth/tokenStorage";
 
-const API = axios.create({ baseURL: "/api" });
+// Backend origin, e.g. https://medicine-donor-api.onrender.com (set in
+// .env / the hosting dashboard). Empty in development: requests go to
+// /api and Vite proxies them to the local backend (see vite.config.js).
+const API_ORIGIN = (import.meta.env.VITE_API_URL || "").trim().replace(/\/+$/, "");
+export const API_BASE_URL = `${API_ORIGIN}/api`;
+
+const API = axios.create({ baseURL: API_BASE_URL });
 
 // Separate client for token endpoints so they never go through the
 // refresh-and-retry interceptor below.
 const AUTH = axios.create({
-  baseURL: "/api/auth",
+  baseURL: `${API_BASE_URL}/auth`,
   headers: { "Content-Type": "application/json" },
 });
 
