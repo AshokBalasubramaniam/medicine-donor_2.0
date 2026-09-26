@@ -1,0 +1,20 @@
+# Secrets — never commit (see backend/.env.example)
+.env
+.env.*
+!.env.example
+
+# Dependencies & build output
+node_modules/
+dist/
+build/
+backend/target/
+
+# User-uploaded files (images now live on Cloudinary)
+backend/uploads/
+backend/src/uploads/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.log
