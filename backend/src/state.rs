@@ -50,7 +50,6 @@ async fn connect() -> anyhow::Result<Database> {
     let ca = env("MONGODB_TLS_CA_FILE")
         .map(|ca| check_pem(&ca, "MONGODB_TLS_CA_FILE", false))
         .transpose()?;
-        println!("Connecting to MongoDB with URI: {}",cert_key.display());
 
     let mut options = ClientOptions::parse(&uri)
         .await
