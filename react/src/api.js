@@ -35,7 +35,20 @@ function normalizeError(error) {
   const status = error?.response?.status;
   const data = error?.response?.data;
   let normalized = { status, error: "Network error. Please check your connection." };
-  if (data) {
+  if (typeof data === "string" && /^\s*</.test(data)) {
+    // An HTML page instead of JSON: the request didn't reach the API
+    // (usually VITE_API_URL is missing, so the static host answered).
+    normalized = {
+      status,
+      error:
+        status === 404
+          ? "Can’t reach the server. Please try again later."
+          : `Server error (${status || "network"}). Please try again later.`,
+    };
+    if (import.meta.env.PROD && !API_ORIGIN) {
+      console.error("VITE_API_URL is not set: API requests are going to the frontend host.");
+    }
+  } else if (data) {
     if (typeof data === "string") normalized = { status, error: data };
     else if (data.error) normalized = { status, error: data.error };
     else if (data.message) normalized = { status, error: data.message };
