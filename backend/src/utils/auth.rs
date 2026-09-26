@@ -60,7 +60,6 @@ impl Role {
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub id: String,
-    pub email: String,
     pub role: Role,
 }
 
@@ -69,7 +68,6 @@ impl AuthUser {
         Some(AuthUser {
             role: Role::from_str(&claims.role)?,
             id: claims.sub,
-            email: claims.email,
         })
     }
 
