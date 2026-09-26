@@ -6,9 +6,9 @@ pub mod pateind_dataget;
 pub mod patient;
 pub mod payment;
 pub mod update_patient;
-pub mod Donation;
+pub mod donation;
 
-use crate::{routes::Donation::donation_routes, state::AppState};
+use crate::{routes::donation::donation_routes, state::AppState};
 use axum::Router;
 
 use admin::admin_routes;

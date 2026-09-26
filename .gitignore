@@ -3,6 +3,14 @@
 .env.*
 !.env.example
 
+# Certificates and private keys (MongoDB X.509, TLS)
+*.pem
+*.key
+*.crt
+*.p12
+backend/certs/*
+!backend/certs/README.md
+
 # Dependencies & build output
 node_modules/
 dist/

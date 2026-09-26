@@ -9,7 +9,7 @@ use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::state::get_db;
 use crate::models::patient::Patient;
-use crate::routes::Donation::save_donation;
+use crate::routes::donation::save_donation;
 use crate::utils::auth::{AuthUser, Role};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -112,7 +112,7 @@ pub async fn create_order(
                         )
                             .into_response()
                     }
-                    Err(err) => {
+                    Err(_err) => {
                         
                         (
                             StatusCode::INTERNAL_SERVER_ERROR,
@@ -127,7 +127,7 @@ pub async fn create_order(
                 (StatusCode::BAD_GATEWAY, Json(json!({"error": text}))).into_response()
             }
         }
-        Err(err) => {
+        Err(_err) => {
             
             (
                 StatusCode::BAD_GATEWAY,
@@ -170,7 +170,7 @@ pub async fn verify_payment(
         payload.amount,
     ).await;
 
-    if let Err(err) = &patient_update_result {
+    if let Err(_err) = &patient_update_result {
         
     }
 
@@ -185,7 +185,7 @@ pub async fn verify_payment(
         payload.amount,                 // amount
     ).await;
 
-    if let Err(err) = &donation_result {
+    if let Err(_err) = &donation_result {
        
     }
 

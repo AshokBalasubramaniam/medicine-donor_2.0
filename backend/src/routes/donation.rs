@@ -1,4 +1,4 @@
-use crate::{models::Donation::Donation};
+use crate::models::donation::Donation;
 use crate::state::{get_db, AppState};
 use axum::{
     extract::State,
@@ -13,7 +13,6 @@ use mongodb::{
 };                                                    
 use anyhow::Result;
 use serde_json::json;
-use futures::TryStreamExt;
 use crate::utils::auth::{AuthUser, Role};
 
 // ======================= ROUTES ============================

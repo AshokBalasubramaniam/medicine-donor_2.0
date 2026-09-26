@@ -1,5 +1,6 @@
 use reqwest::Client as HttpClient;
 use serde::{Deserialize};
+
 pub struct Payment {
     razor_key_id: String,
     razor_key_secret: String,

@@ -9,9 +9,10 @@ patients, donors and administrators; the backend decides each user's role.
 ## Run locally
 
 ```bash
-# Backend (needs MongoDB running)
+# Backend — MongoDB access is X.509 certificate only (no username/password)
 cd backend
 cp .env.example .env   # then fill in the values
+# put the client certificate + key at backend/certs/mongodb-client.pem
 cargo run              # http://localhost:3000
 
 # Frontend
@@ -20,5 +21,5 @@ npm install
 npm run dev            # http://localhost:5173 (proxies /api to the backend)
 ```
 
-Never commit `backend/.env` — it holds database, JWT, Cloudinary, SMTP and
+Never commit `backend/.env` or any `.pem` file — it holds database, JWT, Cloudinary, SMTP and
 Razorpay secrets.
