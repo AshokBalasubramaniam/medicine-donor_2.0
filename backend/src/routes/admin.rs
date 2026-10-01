@@ -16,8 +16,10 @@ use crate::utils::cloudinary::{upload_image, UPLOAD_BODY_LIMIT};
 use axum::extract::DefaultBodyLimit;
 
 /// Fields an admin form must never write directly.
-const PROTECTED_FIELDS: [&str; 9] = [
+const PROTECTED_FIELDS: [&str; 12] = [
     "_id", "id", "password", "refresh_tokens", "otp", "otp_hash", "otp_expires_at", "image_public_id", "email",
+    // Maintained by the payment flow only.
+    "paid_amount", "balance_amount", "last_payment_id",
 ];
 
 pub fn admin_routes(state: AppState) -> Router {
@@ -122,37 +124,22 @@ pub async fn get_patient_by_id(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     user.require(&[Role::Admin])?;
-    let coll: Collection<Patient> = state.db.collection("patients");
+    let coll: Collection<mongodb::bson::Document> = state.db.collection("patients");
 
     let obj_id = match ObjectId::parse_str(&id) {
         Ok(oid) => oid,
         Err(_) => return Err((StatusCode::BAD_REQUEST, Json(json!({"error":"Invalid ID"})))),
     };
 
+    // Full record for the admin review screen, minus credentials and sessions.
     match coll.find_one(doc! { "_id": obj_id }, None).await {
-        Ok(Some(patient)) => {
-            let id_hex = patient
-                .id
-                .clone()
-                .map(|oid| oid.to_hex())
-                .unwrap_or_default();
-
-            let resp = json!({
-                "_id": id_hex,
-                "name": patient.name,
-                "email": patient.email,
-                "age": patient.age,
-                "mobile": patient.mobile,
-                "hospitalname": patient.hospitalname,
-                "doctor": patient.doctor,
-                "date": patient.date,
-                "time": patient.time,
-                "disease": patient.disease,
-                "approved": patient.approved,
-                "medicines": patient.medicines,
-                "created_at": patient.created_at,
-                "image": patient.image,
-            });
+        Ok(Some(mut patient)) => {
+            for secret in ["password", "refresh_tokens", "otp", "otp_hash", "otp_expires_at", "image_public_id", "_id"] {
+                patient.remove(secret);
+            }
+            let mut resp = mongodb::bson::Bson::Document(patient).into_relaxed_extjson();
+            resp["_id"] = json!(obj_id.to_hex());
+            resp["id"] = json!(obj_id.to_hex());
             Ok(Json(resp))
         }
 
@@ -226,6 +213,14 @@ pub async fn update_patient(
                 if let Ok(b) = value.parse::<bool>() {
                     update_doc.insert(name, b);
                 }
+            } else if name == "medicines" {
+                // Stored as a list (the Patient model reads Vec<String>); forms send text.
+                let list: Vec<String> = value
+                    .split(|c| c == '\n' || c == ',')
+                    .map(|m| m.trim().to_string())
+                    .filter(|m| !m.is_empty())
+                    .collect();
+                update_doc.insert(name, list);
             } else {
                 update_doc.insert(name, value);
             }
@@ -241,10 +236,37 @@ pub async fn update_patient(
             Err(e) => return e,
         }
     }
-    if let Some(amount) = update_doc.get("amount") {
-        if let Ok(a) = amount.as_str().unwrap().parse::<f64>() {
-            update_doc.insert("amount", a);
+    if let Some(raw) = update_doc.get_str("amount").ok().map(str::to_string) {
+        let Ok(amount) = raw.trim().parse::<f64>() else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Required amount must be a number"})),
+            );
+        };
+        if amount < 0.0 || !amount.is_finite() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Required amount can't be negative"})),
+            );
         }
+        // Keep the balance in step with what donors have already paid.
+        let paid = match coll.find_one(doc! { "_id": obj_id }, None).await {
+            Ok(Some(d)) => match d.get("paid_amount") {
+                Some(mongodb::bson::Bson::Double(n)) => *n,
+                Some(mongodb::bson::Bson::Int32(n)) => *n as f64,
+                Some(mongodb::bson::Bson::Int64(n)) => *n as f64,
+                _ => 0.0,
+            },
+            _ => 0.0,
+        };
+        if amount < paid {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("Required amount can't be less than the ₹{} already raised", paid as i64)})),
+            );
+        }
+        update_doc.insert("amount", amount);
+        update_doc.insert("balance_amount", amount - paid);
     }
 
     if update_doc.is_empty() {

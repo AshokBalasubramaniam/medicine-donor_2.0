@@ -25,6 +25,43 @@ pub struct Payment {
 #[derive(Deserialize)]
 pub struct CreateOrderRequest {
     pub amount_rupees: i64,
+    /// When given, the amount is checked against that patient's remaining balance.
+    #[serde(default)]
+    pub patient_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RazorpayPayment {
+    amount: i64,
+    status: String,
+    order_id: Option<String>,
+}
+
+fn bson_num(v: Option<&mongodb::bson::Bson>) -> f64 {
+    use mongodb::bson::Bson;
+    match v {
+        Some(Bson::Double(n)) => *n,
+        Some(Bson::Int32(n)) => *n as f64,
+        Some(Bson::Int64(n)) => *n as f64,
+        Some(Bson::String(s)) => s.trim().parse().unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+/// Remaining amount (in rupees) an approved, open case can still receive.
+async fn open_balance(patient_id: &str) -> Result<f64, (StatusCode, &'static str)> {
+    let oid = ObjectId::parse_str(patient_id).map_err(|_| (StatusCode::BAD_REQUEST, "Invalid patient id"))?;
+    let db = get_db().await.map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database unavailable"))?;
+    let patient = db
+        .collection::<mongodb::bson::Document>("patients")
+        .find_one(doc! { "_id": oid }, None)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error"))?
+        .ok_or((StatusCode::NOT_FOUND, "Patient not found"))?;
+    if !patient.get_bool("approved").unwrap_or(false) || patient.get_bool("rejected").unwrap_or(false) {
+        return Err((StatusCode::BAD_REQUEST, "This patient is not open for donations"));
+    }
+    Ok((bson_num(patient.get("amount")) - bson_num(patient.get("paid_amount"))).max(0.0))
 }
 
 #[derive(Deserialize)]
@@ -38,7 +75,10 @@ pub struct VerifyPayload {
     #[serde(default)]
     pub donor_id:String,
     pub donor_name:String,
-    pub amount: i64,       
+    /// Ignored: the amount is read back from Razorpay.
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub amount: i64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -74,6 +114,24 @@ pub async fn create_order(
 ) -> impl IntoResponse {
     if let Err(denied) = user.require(&[Role::Donor]) {
         return denied.into_response();
+    }
+    if payload.amount_rupees < 1 {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "Donation amount must be at least ₹1"}))).into_response();
+    }
+    if let Some(pid) = payload.patient_id.as_deref().filter(|p| !p.is_empty()) {
+        match open_balance(pid).await {
+            Ok(balance) if balance < 1.0 => {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": "This patient's need is already fully funded"}))).into_response();
+            }
+            Ok(balance) if payload.amount_rupees as f64 > balance => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": format!("The amount can't be more than the remaining ₹{}", balance as i64)})),
+                ).into_response();
+            }
+            Ok(_) => {}
+            Err((code, msg)) => return (code, Json(json!({"error": msg}))).into_response(),
+        }
     }
     let url = "https://api.razorpay.com/v1/orders";
 
@@ -163,11 +221,36 @@ pub async fn verify_payment(
         ).into_response();
     }
 
+    // Step 0b: Take the amount from Razorpay, never from the browser. The
+    // signature only covers the ids, so `payload.amount` can't be trusted.
+    let payment = match state
+        .http_client
+        .get(format!("https://api.razorpay.com/v1/payments/{}", payload.razorpay_payment_id))
+        .basic_auth(&state.razor_key_id, Some(&state.razor_key_secret))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => resp.json::<RazorpayPayment>().await.ok(),
+        _ => None,
+    };
+    let Some(payment) = payment else {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": "Could not confirm the payment with Razorpay. If money was deducted, contact support with your payment id."})),
+        ).into_response();
+    };
+    if payment.order_id.as_deref() != Some(payload.razorpay_order_id.as_str())
+        || !matches!(payment.status.as_str(), "authorized" | "captured")
+    {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "Payment does not match this order"}))).into_response();
+    }
+    let amount = payment.amount / 100;
+
     // Step 1: Update patient DB, log error but don't fail payment
     let patient_update_result = update_patient_payment(
         &payload.patient_id,
         &payload.razorpay_payment_id,
-        payload.amount,
+        amount,
     ).await;
 
     if let Err(_err) = &patient_update_result {
@@ -182,7 +265,7 @@ pub async fn verify_payment(
         &payload.patient_name,                        // patient_name
         &payload.patient_id,            // patient_id
         &payload.razorpay_payment_id,   // payment_id
-        payload.amount,                 // amount
+        amount,                         // amount confirmed by Razorpay
     ).await;
 
     if let Err(_err) = &donation_result {

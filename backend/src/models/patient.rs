@@ -29,6 +29,8 @@ pub struct Patient {
     pub town: String,
     pub pincode: String,
     pub state: String,
+    #[serde(default)]
+    pub address: String,
      #[serde(default)] 
     pub approved: bool,
     pub image: Option<String>, 

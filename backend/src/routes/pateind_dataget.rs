@@ -1,32 +1,39 @@
 use axum::{extract::State, http::StatusCode, Json};
-use mongodb::bson::{doc, oid::ObjectId};
+use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
 use serde_json::json;
 
-use crate::models::patient::Patient;
 use crate::state::AppState;
 use crate::utils::auth::{AuthUser, Role};
+
+/// Fields that never leave the server.
+const HIDDEN_FIELDS: [&str; 7] = [
+    "password",
+    "refresh_tokens",
+    "otp",
+    "otp_hash",
+    "otp_expires_at",
+    "image_public_id",
+    "last_payment_id",
+];
 
 pub async fn get_patient_details(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     user.require(&[Role::Patient])?;
-    let user_id = user.id;
 
-    // Parse user_id as ObjectId
-    let obj_id = ObjectId::parse_str(&user_id).map_err(|_| {
+    let obj_id = ObjectId::parse_str(&user.id).map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "Invalid user id in token"})),
         )
     })?;
 
-
-    // Get MongoDB collection
-    let coll = state.db.collection::<Patient>("patients");
-
-    // Find patient by _id
-    let patient = coll
+    // Read the raw document so profile, medical and admin-managed fields
+    // (amount, paid_amount, rejected, ...) are all returned as stored.
+    let mut patient = state
+        .db
+        .collection::<Document>("patients")
         .find_one(doc! { "_id": obj_id }, None)
         .await
         .map_err(|e| {
@@ -40,27 +47,12 @@ pub async fn get_patient_details(
             Json(json!({"error": "Patient not found"})),
         ))?;
 
-    let user_resp = json!({
-        "id": patient.id.map(|oid| oid.to_hex()),
-        "name": patient.name,
-        "email": patient.email,
-        "age": patient.age,
-        "mobile": patient.mobile,
-        "hospitalname": patient.hospitalname,
-        "doctor": patient.doctor,
-        "date": patient.date,
-        "time": patient.time,
-        "disease": patient.disease,
-        "approved": patient.approved,
-        "medicines": patient.medicines,
-        "created_at": patient.created_at,
-        "aadharno":patient.aadharno,
-        "panno":patient.panno,
-        "relationship":patient.relationship,
-        "gender":patient.gender,
-         "image": patient.image,
-    });
- 
+    for field in HIDDEN_FIELDS {
+        patient.remove(field);
+    }
+    patient.remove("_id");
 
-    Ok(Json(user_resp))
+    let mut resp = Bson::Document(patient).into_relaxed_extjson();
+    resp["id"] = json!(obj_id.to_hex());
+    Ok(Json(resp))
 }

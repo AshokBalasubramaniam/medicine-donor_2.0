@@ -1,3 +1,5 @@
+mod admin_cli;
+mod seed;
 mod models;
 mod routes;
 mod state;
@@ -35,6 +37,15 @@ async fn main() -> anyhow::Result<()> {
             anyhow::bail!("backend/.env could not be read: {} (quote values that contain spaces)", e);
         }
     }
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("create-admin") => return admin_cli::create_admin(&args[1..]).await,
+        Some("seed-test-data") => return seed::seed_test_data().await,
+        Some("clear-test-data") => return seed::clear_test_data().await,
+        _ => {}
+    }
+
     let state = init_state().await?;
 
     let app = Router::new()
