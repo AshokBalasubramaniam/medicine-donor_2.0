@@ -259,10 +259,15 @@ export const adminUpdatePatient = async (_token, id, payload) => {
   return res.data;
 };
 
-export async function createOrder(_token, amount_rupees) {
-  const res = await API.post("/create_order", { amount_rupees });
+export async function createOrder(_token, amount_rupees, patient_id) {
+  const res = await API.post("/create_order", { amount_rupees, patient_id });
   return res.data;
 }
+
+export const getMyDonations = async () => {
+  const res = await API.get("/donor/mydonations");
+  return res.data;
+};
 
 export async function verifyPayment(_token, payload) {
   const res = await API.post("/verify_payment", payload);

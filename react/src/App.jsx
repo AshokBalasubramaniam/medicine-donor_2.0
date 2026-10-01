@@ -9,18 +9,20 @@ import NotFoundPage from "./pages/NotFoundPage";
 
 import PublicOnlyRoute from "./components/routing/PublicOnlyRoute";
 import RoleBasedRoute from "./components/routing/RoleBasedRoute";
-import DashboardLayout from "./components/layout/DashboardLayout";
+import AdminLayout from "./components/layout/AdminLayout";
+import PatientLayout from "./components/layout/PatientLayout";
 import { ROLES } from "./auth/roles";
 import FeedbackHost from "./components/feedback/FeedbackHost";
 
 import PatientDetails from "./components/patients/PatientDetails";
-import Donorgetpatientdetails from "./components/donor/Donorgetpatientdetails";
-import Dashboard from "./components/admin/Dashboard";
-import AllPatients from "./components/admin/AllPatients";
-import PendingPatients from "./components/admin/PendingPatients";
-import ApprovedPatients from "./components/admin/ApprovedPatients";
-import RejectedPatients from "./components/admin/RejectedPatients";
-import CompletedPatients from "./components/admin/CompletedPatients";
+import DonorLayout from "./components/layout/DonorLayout";
+import DonorOverview from "./components/donor/DonorOverview";
+import PatientsInNeed from "./components/donor/PatientsInNeed";
+import MakeDonation from "./components/donor/MakeDonation";
+import MyDonations from "./components/donor/MyDonations";
+import AdminOverview from "./components/admin/AdminOverview";
+import AdminPatientList from "./components/admin/AdminPatientList";
+import AdminReview from "./components/admin/AdminReview";
 import AdminPatientDetails from "./components/admin/adminPatientDetails";
 import Doctor from "./components/admin/Doctor";
 
@@ -51,29 +53,33 @@ export default function App() {
         </Route>
 
         <Route element={<RoleBasedRoute allow={[ROLES.PATIENT]} />}>
-          <Route path="/patient" element={<DashboardLayout />}>
+          <Route path="/patient" element={<PatientLayout />}>
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<PatientDetails />} />
           </Route>
         </Route>
 
         <Route element={<RoleBasedRoute allow={[ROLES.DONOR]} />}>
-          <Route path="/donor" element={<DashboardLayout />}>
+          <Route path="/donor" element={<DonorLayout />}>
             <Route index element={<Navigate to="dashboard" replace />} />
-            <Route path="dashboard" element={<Donorgetpatientdetails />} />
+            <Route path="dashboard" element={<DonorOverview />} />
+            <Route path="patients" element={<PatientsInNeed />} />
+            <Route path="donate" element={<MakeDonation />} />
+            <Route path="donations" element={<MyDonations />} />
           </Route>
         </Route>
 
         <Route element={<RoleBasedRoute allow={[ROLES.ADMIN]} />}>
-          <Route path="/admin" element={<DashboardLayout />}>
+          <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<Navigate to="dashboard" replace />} />
-            <Route path="dashboard" element={<Dashboard />} />
-            <Route path="patients" element={<AllPatients />} />
-            <Route path="patients/pending" element={<PendingPatients />} />
-            <Route path="patients/approved" element={<ApprovedPatients />} />
-            <Route path="patients/rejected" element={<RejectedPatients />} />
-            <Route path="patients/completed" element={<CompletedPatients />} />
+            <Route path="dashboard" element={<AdminOverview />} />
+            <Route path="patients" element={<Navigate to="/admin/patients/pending" replace />} />
+            <Route path="patients/pending" element={<AdminPatientList key="pending" status="pending" />} />
+            <Route path="patients/approved" element={<AdminPatientList key="approved" status="approved" />} />
+            <Route path="patients/rejected" element={<AdminPatientList key="rejected" status="rejected" />} />
+            <Route path="patients/completed" element={<AdminPatientList key="completed" status="completed" />} />
             <Route path="patients/:id" element={<AdminPatientDetails />} />
+            <Route path="patients/:id/review" element={<AdminReview />} />
             <Route path="doctors" element={<Doctor />} />
           </Route>
         </Route>

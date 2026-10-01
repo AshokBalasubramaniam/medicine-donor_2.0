@@ -1,1159 +1,461 @@
-// Professional Medical Patient Details Component
 import React, { useEffect, useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import { confirm, toast } from '../feedback/feedback';
-import { cloudinaryThumb } from '../../utils/cloudinary';
+import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
-import { getPatientDetails, updatePatientDetails } from '../../api';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  BadgeCheck,
+  BedDouble,
+  Briefcase,
+  CalendarCheck,
+  CalendarDays,
+  Check,
+  ClipboardList,
+  Clock,
+  Droplet,
+  FileText,
+  Heart,
+  HeartPulse,
+  Hospital,
+  IdCard,
+  IndianRupee,
+  Lock,
+  Mail,
+  MapPin,
+  Pencil,
+  Phone,
+  Pill,
+  ShieldAlert,
+  Stethoscope,
+  UserRound,
+  Users,
+  Wallet,
+  XCircle,
+} from 'lucide-react';
+import { cloudinaryThumb } from '../../utils/cloudinary';
+import { getPatientDetails } from '../../api';
+import PatientEditForm from './PatientEditForm';
+import { REQUIRED_FOR_REVIEW, prescriptionOf } from './patientFields';
+import './patient-dashboard.css';
 
-// Professional Medical UI Styles
-const styles = {
-  // Main Container
-  container: {
-    fontFamily: "'Inter', 'Segoe UI', 'Roboto', sans-serif",
-    backgroundColor: "transparent",
-    color: "#1e293b",
-  },
+const HERO_IMAGE =
+  'https://images.unsplash.com/photo-1764885415480-558e5631d371?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=85&w=1600';
 
-  // Header/Navigation
-  header: {
-    background: "linear-gradient(135deg, #0f766e 0%, #059669 100%)",
-    boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
-    position: "sticky",
-    top: 0,
-    zIndex: 50,
-  },
-  headerContent: {
-    maxWidth: "1200px",
-    margin: "0 auto",
-    padding: "0 1rem",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    height: "72px",
-  },
-  logo: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.75rem",
-  },
-  logoIcon: {
-    width: "40px",
-    height: "40px",
-    backgroundColor: "#ffffff",
-    borderRadius: "12px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "20px",
-    color: "#059669",
-    fontWeight: "bold",
-  },
-  logoText: {
-    fontSize: "24px",
-    fontWeight: "700",
-    color: "#ffffff",
-    margin: 0,
-  },
-  userInfo: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.5rem",
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
-    padding: "0.5rem 1rem",
-    borderRadius: "24px",
-    backdropFilter: "blur(10px)",
-  },
-  userInfoText: {
-    color: "#ffffff",
-    fontSize: "14px",
-    fontWeight: "500",
-  },
+const SEVERITY_TONE = { Mild: 'green', Moderate: 'amber', Severe: 'orange', Critical: 'red' };
 
-  // Main Content
-  mainContent: {
-    maxWidth: "1200px",
-    margin: "0 auto",
-    padding: "2rem 1rem",
-  },
+// BSON DateTime arrives as { $date: { $numberLong } } or { $date: "<iso>" }.
+function bsonDate(value) {
+  const d = value?.$date ?? value;
+  return d?.$numberLong ? Number(d.$numberLong) : d;
+}
 
-  // Patient Header Section
-  patientHeader: {
-    backgroundColor: "#ffffff",
-    borderRadius: "16px",
-    padding: "2rem",
-    marginBottom: "2rem",
-    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)",
-    border: "1px solid #e2e8f0",
-  },
-  patientHeaderContent: {
-    display: "flex",
-    alignItems: "center",
-    gap: "2rem",
-    flexWrap: "wrap",
-  },
-  patientAvatar: {
-    position: "relative",
-  },
-  avatarImage: {
-    width: "120px",
-    height: "120px",
-    borderRadius: "16px",
-    objectFit: "cover",
-    border: "4px solid #e2e8f0",
-    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.1)",
-  },
-  avatarBadge: {
-    position: "absolute",
-    top: "-8px",
-    right: "-8px",
-    width: "32px",
-    height: "32px",
-    borderRadius: "50%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "16px",
-    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.15)",
-  },
-  statusApproved: {
-    backgroundColor: "#10b981",
-    color: "#ffffff",
-  },
-  statusPending: {
-    backgroundColor: "#f59e0b",
-    color: "#ffffff",
-  },
-  patientInfo: {
-    flex: 1,
-    minWidth: "300px",
-  },
-  patientName: {
-    fontSize: "2rem",
-    fontWeight: "700",
-    color: "#1e293b",
-    marginBottom: "0.5rem",
-    lineHeight: "1.2",
-  },
-  patientMeta: {
-    display: "flex",
-    gap: "2rem",
-    marginBottom: "1rem",
-    flexWrap: "wrap",
-  },
-  metaItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.5rem",
-    color: "#64748b",
-    fontSize: "0.875rem",
-  },
-  metaIcon: {
-    color: "#059669",
-    fontSize: "16px",
-  },
-  patientId: {
-    backgroundColor: "#f1f5f9",
-    color: "#475569",
-    padding: "0.25rem 0.75rem",
-    borderRadius: "20px",
-    fontSize: "0.75rem",
-    fontWeight: "600",
-    display: "inline-block",
-    marginBottom: "1rem",
-    textTransform: "uppercase",
-    letterSpacing: "0.05em",
-  },
-  patientActions: {
-    display: "flex",
-    gap: "1rem",
-    flexWrap: "wrap",
-  },
-  actionButton: {
-    padding: "0.75rem 1.5rem",
-    borderRadius: "8px",
-    fontSize: "0.875rem",
-    fontWeight: "600",
-    cursor: "pointer",
-    transition: "all 0.2s ease-in-out",
-    border: "none",
-    textTransform: "uppercase",
-    letterSpacing: "0.05em",
-  },
-  primaryButton: {
-    background: "linear-gradient(135deg, #059669 0%, #047857 100%)",
-    color: "#ffffff",
-    boxShadow: "0 4px 12px rgba(5, 150, 105, 0.3)",
-  },
-  primaryButtonHover: {
-    transform: "translateY(-1px)",
-    boxShadow: "0 6px 20px rgba(5, 150, 105, 0.4)",
-  },
-  secondaryButton: {
-    backgroundColor: "#ffffff",
-    color: "#64748b",
-    border: "2px solid #e2e8f0",
-  },
-  secondaryButtonHover: {
-    borderColor: "#cbd5e1",
-    backgroundColor: "#f8fafc",
-  },
+function formatDate(value, fallback = 'Not set') {
+  if (!value) return fallback;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
+}
 
-  // Content Grid
-  contentGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: "2rem",
-  },
-  "@media (min-width: 1024px)": {
-    contentGrid: {
-      gridTemplateColumns: "2fr 1fr",
-    },
-  },
+function formatTime(value) {
+  if (!value) return '';
+  const [h, m] = String(value).split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return String(value);
+  return new Date(2000, 0, 1, h, m).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+}
 
-  // Information Cards
-  infoCard: {
-    backgroundColor: "#ffffff",
-    borderRadius: "12px",
-    padding: "1.5rem",
-    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)",
-    border: "1px solid #e2e8f0",
-  },
-  cardHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.75rem",
-    marginBottom: "1rem",
-    paddingBottom: "0.75rem",
-    borderBottom: "2px solid #f1f5f9",
-  },
-  cardIcon: {
-    width: "40px",
-    height: "40px",
-    borderRadius: "10px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "18px",
-  },
-  cardTitle: {
-    fontSize: "1.25rem",
-    fontWeight: "700",
-    color: "#1e293b",
-    margin: 0,
-  },
-  cardContent: {
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: "1rem",
-  },
-  "@media (min-width: 640px)": {
-    cardContent: {
-      gridTemplateColumns: "repeat(2, 1fr)",
-    },
-  },
+const money = (n) => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
 
-  // Form Fields
-  formGroup: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.5rem",
-  },
-  formLabel: {
-    fontSize: "0.875rem",
-    fontWeight: "600",
-    color: "#374151",
-    display: "flex",
-    alignItems: "center",
-    gap: "0.5rem",
-  },
-  formInput: {
-    width: "100%",
-    padding: "0.75rem 1rem",
-    border: "2px solid #e2e8f0",
-    borderRadius: "8px",
-    fontSize: "0.875rem",
-    color: "#1e293b",
-    backgroundColor: "#ffffff",
-    outline: "none",
-    transition: "all 0.2s ease-in-out",
-    fontFamily: "inherit",
-  },
-  formInputFocus: {
-    borderColor: "#059669",
-    boxShadow: "0 0 0 3px rgba(5, 150, 105, 0.1)",
-  },
-  formSelect: {
-    ...this?.formInput,
-    cursor: "pointer",
-  },
-  formTextarea: {
-    ...this?.formInput,
-    minHeight: "100px",
-    resize: "vertical",
-  },
-  readOnlyField: {
-    backgroundColor: "#f8fafc",
-    borderColor: "#e2e8f0",
-    color: "#64748b",
-    cursor: "not-allowed",
-  },
+function maskTail(value, visible = 4) {
+  if (!value) return 'Not provided';
+  const s = String(value);
+  return s.length <= visible ? s : '•'.repeat(s.length - visible) + s.slice(-visible);
+}
 
-  // Medical History Section
-  medicalHistory: {
-    backgroundColor: "#ffffff",
-    borderRadius: "12px",
-    padding: "1.5rem",
-    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)",
-    border: "1px solid #e2e8f0",
-  },
-  historyHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.75rem",
-    marginBottom: "1rem",
-    paddingBottom: "0.75rem",
-    borderBottom: "2px solid #f1f5f9",
-  },
-  historyIcon: {
-    width: "40px",
-    height: "40px",
-    backgroundColor: "#fef3c7",
-    borderRadius: "10px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "#d97706",
-    fontSize: "18px",
-  },
-  historyTitle: {
-    fontSize: "1.25rem",
-    fontWeight: "700",
-    color: "#1e293b",
-    margin: 0,
-  },
-  historyGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: "1rem",
-  },
-  "@media (min-width: 640px)": {
-    historyGrid: {
-      gridTemplateColumns: "repeat(2, 1fr)",
-    },
-  },
-  historyItem: {
-    backgroundColor: "#f8fafc",
-    borderRadius: "8px",
-    padding: "1rem",
-    border: "1px solid #e2e8f0",
-  },
-  historyLabel: {
-    fontSize: "0.75rem",
-    color: "#64748b",
-    fontWeight: "600",
-    textTransform: "uppercase",
-    letterSpacing: "0.05em",
-    marginBottom: "0.25rem",
-  },
-  historyValue: {
-    fontSize: "0.875rem",
-    color: "#1e293b",
-    fontWeight: "500",
-  },
+function stayLength(admit, discharge) {
+  if (!admit) return 'Not applicable';
+  const start = new Date(admit);
+  const end = discharge ? new Date(discharge) : new Date();
+  const days = Math.max(0, Math.round((end - start) / 86400000));
+  if (Number.isNaN(days)) return 'Not applicable';
+  return `${days} day${days === 1 ? '' : 's'}${discharge ? '' : ' (still admitted)'}`;
+}
 
-  // Status Cards
-  statusCard: {
-    backgroundColor: "#ffffff",
-    borderRadius: "12px",
-    padding: "1.5rem",
-    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06)",
-    border: "1px solid #e2e8f0",
-  },
-  statusHeader: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.75rem",
-    marginBottom: "1rem",
-  },
-  statusIcon: {
-    width: "40px",
-    height: "40px",
-    borderRadius: "10px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "18px",
-  },
-  statusTitle: {
-    fontSize: "1.25rem",
-    fontWeight: "700",
-    color: "#1e293b",
-    margin: 0,
-  },
-  statusBadge: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "0.5rem",
-    padding: "0.5rem 1rem",
-    borderRadius: "20px",
-    fontSize: "0.875rem",
-    fontWeight: "600",
-    textTransform: "uppercase",
-    letterSpacing: "0.05em",
-  },
-  statusApproved: {
-    backgroundColor: "#f0fdf4",
-    color: "#166534",
-    border: "1px solid #bbf7d0",
-  },
-  statusPending: {
-    backgroundColor: "#fef3c7",
-    color: "#92400e",
-    border: "1px solid #fde68a",
-  },
+function initials(name) {
+  if (!name) return 'P';
+  return name.split(/\s+/).filter(Boolean).map((w) => w[0]).join('').toUpperCase().slice(0, 2);
+}
 
-  // Loading States
-  loadingState: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "4rem 2rem",
-    textAlign: "center",
-  },
-  loadingSpinner: {
-    width: "48px",
-    height: "48px",
-    border: "4px solid #e2e8f0",
-    borderTop: "4px solid #059669",
-    borderRadius: "50%",
-    animation: "spin 1s linear infinite",
-    marginBottom: "1rem",
-  },
-  loadingText: {
-    fontSize: "1.125rem",
-    color: "#64748b",
-    fontWeight: "500",
-  },
+function scrollTo(id) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
-  // Error States
-  errorMessage: {
-    backgroundColor: "#fef2f2",
-    border: "1px solid #fecaca",
-    borderRadius: "8px",
-    padding: "1rem",
-    marginBottom: "1rem",
-    display: "flex",
-    alignItems: "center",
-    gap: "0.75rem",
-  },
-  errorIcon: {
-    color: "#dc2626",
-    fontSize: "20px",
-  },
-  errorText: {
-    fontSize: "0.875rem",
-    color: "#dc2626",
-    fontWeight: "500",
-    margin: 0,
-  },
+/** Single application state derived from admin + payment fields. */
+function applicationState(p) {
+  const amount = Number(p.amount) || 0;
+  const paid = Number(p.paid_amount) || 0;
+  if (p.rejected) return { key: 'rejected', label: 'REJECTED', amount, paid };
+  if (p.approved && amount > 0 && paid >= amount) return { key: 'funded', label: 'FULLY FUNDED', amount, paid };
+  if (p.approved) return { key: 'approved', label: 'APPROVED', amount, paid };
+  return { key: 'pending', label: 'PENDING REVIEW', amount, paid };
+}
 
-  // File Upload
-  fileUpload: {
-    marginTop: "1rem",
-  },
-  fileInput: {
-    display: "none",
-  },
-  fileLabel: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "0.5rem",
-    padding: "0.5rem 1rem",
-    backgroundColor: "#f1f5f9",
-    border: "2px dashed #cbd5e1",
-    borderRadius: "8px",
-    cursor: "pointer",
-    transition: "all 0.2s ease-in-out",
-    color: "#475569",
-    fontSize: "0.875rem",
-    fontWeight: "500",
-  },
-  fileLabelHover: {
-    backgroundColor: "#e2e8f0",
-    borderColor: "#94a3b8",
-  },
-};
+function SectionTitle({ icon: Icon, title, subtitle, action, onAction }) {
+  return (
+    <div className="pd-section-head">
+      <div className="pd-section-title">
+        <span className="pd-section-icon" aria-hidden="true"><Icon size={20} /></span>
+        <div>
+          <h2>{title}</h2>
+          {subtitle && <p>{subtitle}</p>}
+        </div>
+      </div>
+      {action && <button type="button" className="pd-link-btn" onClick={onAction}>{action}</button>}
+    </div>
+  );
+}
 
-function PatientDetails() {
-  const dispatch = useDispatch();
+function InfoTile({ icon: Icon, label, value, color = 'blue', wide = false, multiline = false }) {
+  return (
+    <div className={`pd-tile ${wide ? 'is-wide' : ''}`}>
+      <span className={`pd-tile-icon is-${color}`} aria-hidden="true"><Icon size={18} /></span>
+      <div className="pd-tile-text">
+        <p className="pd-tile-label">{label}</p>
+        <p className={`pd-tile-value ${multiline ? 'is-multiline' : ''}`} title={typeof value === 'string' ? value : undefined}>{value}</p>
+      </div>
+    </div>
+  );
+}
+
+function QuickAction({ icon: Icon, title, tone, onClick }) {
+  return (
+    <button type="button" className={`pd-quick is-${tone}`} onClick={onClick}>
+      <span className="pd-quick-icon" aria-hidden="true"><Icon size={22} /></span>
+      <span className="pd-quick-foot">
+        <span className="pd-quick-title">{title}</span>
+        <span className="pd-quick-arrow" aria-hidden="true"><ArrowRight size={16} /></span>
+      </span>
+    </button>
+  );
+}
+
+export default function PatientDetails() {
   const navigate = useNavigate();
   const token = useSelector((state) => state.auth?.token);
 
   const [patient, setPatient] = useState(null);
-  const [editpatient, setEditPatient] = useState({
-    id: '',
-    name: '',
-    email: '',
-    age: '',
-    date: '',
-    time: '',
-    mobile: '',
-    image: '',
-    sex: '',
-    relationshipstatus: '',
-  });
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [dpFile, setDpFile] = useState(null);
-  const [dpPreview, setDpPreview] = useState(null);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [dpPreview, setDpPreview] = useState(null);
+  // Bumped after each save so the edit form re-initialises from fresh data.
+  const [saveCount, setSaveCount] = useState(0);
 
   useEffect(() => {
     if (!token) {
       navigate('/login');
       return;
     }
-
-    async function fetchPatient() {
+    (async () => {
       setLoading(true);
       setError('');
       try {
-        const data = await getPatientDetails(token);
-        setPatient(data);
+        setPatient(await getPatientDetails(token));
       } catch (err) {
         console.error('Fetch details error:', err);
         setError(err.error || 'Failed to fetch patient details');
       } finally {
         setLoading(false);
       }
-    }
-
-    fetchPatient();
-
-  }, [token, dispatch, navigate]);
-
-  useEffect(() => {
-    if (patient) {
-      setEditPatient({
-        id: patient.id || patient._id || '',
-        name: patient.name || '',
-        email: patient.email || '',
-        // New accounts start with age 0; show it as empty so the min=1 check doesn't block saving.
-        age: patient.age ? patient.age : '',
-        date: patient.date || '',
-        time: patient.time || '',
-        mobile: patient.mobile || '',
-        sex: patient.gender || patient.sex || '',
-        relationshipstatus: patient.relationship || patient.relationshipstatus || '',
-        image: patient.image || '',
-      });
-      if (patient.image) setDpPreview(patient.image);
-    }
-  }, [patient]);
-
-  // Helper functions
-  const formatDate = (dateString) => {
-    if (!dateString) return 'Not set';
-    try {
-      return new Date(dateString).toLocaleDateString('en-IN', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      });
-    } catch {
-      return dateString;
-    }
-  };
-
-  const getInitials = (name) => {
-    if (!name) return 'P';
-    return name
-      .split(' ')
-      .map(word => word.charAt(0))
-      .join('')
-      .toUpperCase()
-      .slice(0, 2);
-  };
+    })();
+  }, [token, navigate]);
 
   if (loading && !patient) {
     return (
-      <div style={styles.container}>
-        <div style={styles.loadingState}>
-          <div style={styles.loadingSpinner}></div>
-          <p style={styles.loadingText}>Loading patient information...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error && !patient) {
-    return (
-      <div style={styles.container}>
-        <div style={styles.mainContent}>
-          <div style={styles.errorMessage}>
-            <span style={styles.errorIcon}>⚠️</span>
-            <p style={styles.errorText}>{error}</p>
-          </div>
-        </div>
+      <div className="pd-state">
+        <span className="spinner spinner-lg" aria-hidden="true" />
+        <p>Loading your dashboard…</p>
       </div>
     );
   }
 
   if (!patient) {
     return (
-      <div style={styles.container}>
-        <div style={styles.loadingState}>
-          <p style={styles.loadingText}>Patient data not available</p>
-        </div>
+      <div className="pd-state">
+        <p className="pd-error">{error || 'Patient data not available'}</p>
       </div>
     );
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const ok = await confirm({
-      title: 'Save changes?',
-      message: 'Your profile will be updated with the details you entered.',
-      confirmText: 'Save changes',
-      icon: 'save',
-    });
-    if (!ok) return;
-    setSaving(true);
-    setError('');
-    setSuccess('');
+  const app = applicationState(patient);
+  const locked = !!patient.approved;
+  const firstName = (patient.name || '').split(/\s+/)[0] || 'there';
+  const avatar = cloudinaryThumb(dpPreview || patient.image);
+  const meds = prescriptionOf(patient);
+  const checklist = REQUIRED_FOR_REVIEW.map((item) => ({ label: item.label, done: item.ok(patient) }));
+  const completeness = Math.round((checklist.filter((c) => c.done).length / checklist.length) * 100);
+  const missing = checklist.filter((c) => !c.done);
+  const fundedPct = app.amount > 0 ? Math.min(100, Math.round((app.paid / app.amount) * 100)) : 0;
+  const severityTone = SEVERITY_TONE[patient.severity] || 'blue';
+  const appointment = patient.date
+    ? `${formatDate(patient.date)}${patient.time ? ` · ${formatTime(patient.time)}` : ''}`
+    : 'Not scheduled';
+  const fullAddress = [patient.address, patient.town, patient.state, patient.pincode].filter(Boolean).join(', ');
 
-    try {
-      const formData = new FormData();
-      formData.append('id', editpatient.id);
-      formData.append('name', editpatient.name);
-      formData.append('email', editpatient.email);
-      formData.append('age', editpatient.age);
-      formData.append('date', editpatient.date);
-      formData.append('time', editpatient.time);
-      formData.append('mobile', editpatient.mobile);
-      formData.append('gender', editpatient.sex || '');
-      formData.append('relationship', editpatient.relationshipstatus || '');
+  const steps = [
+    { label: 'Account created', done: true, note: formatDate(bsonDate(patient.created_at), '') },
+    { label: 'Profile & medical details', done: completeness === 100, note: `${completeness}% complete` },
+    {
+      label: 'Admin review',
+      done: patient.approved || patient.rejected,
+      failed: !!patient.rejected,
+      note: patient.rejected ? 'Rejected' : patient.approved ? 'Approved' : 'In progress',
+    },
+    {
+      label: 'Receiving donations',
+      done: app.key === 'funded',
+      note: app.amount > 0 ? `${money(app.paid)} of ${money(app.amount)}` : patient.approved ? 'Amount being set' : 'After approval',
+    },
+  ];
 
-      if (dpFile) {
-        formData.append('image', dpFile);
-      }
-
-      await updatePatientDetails(token, formData);
-      toast.success('Your profile details were updated.', 'Changes saved');
-
-      const updated = await getPatientDetails(token);
-      setPatient(updated);
-      if (updated.image) setDpPreview(updated.image);
-    } catch (err) {
-      console.error('Update error:', err);
-      setError(err.error || 'Failed to update patient details');
-      toast.error(err.error || 'Failed to update patient details', 'Couldn’t save changes');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function handleFileChange(e) {
-    const file = e.target.files?.[0];
-    if (file) {
-      // Validate file type
-      if (!file.type.startsWith('image/')) {
-        setError('Please select a valid image file');
-        return;
-      }
-      // Validate file size (5MB limit)
-      if (file.size > 5 * 1024 * 1024) {
-        setError('File size must be less than 5MB');
-        return;
-      }
-
-      setDpFile(file);
-      setDpPreview(URL.createObjectURL(file));
-      setError('');
-    }
-  }
-
-  const handleInputChange = (field, value) => {
-    setEditPatient(prev => ({ ...prev, [field]: value }));
-    setError('');
-    setSuccess('');
-  };
+  const statusMessage = {
+    pending:
+      completeness === 100
+        ? 'Your application is complete and waiting for the hospital administration team to review it.'
+        : 'Complete the missing details below so the hospital administration team can review your application.',
+    approved: 'Your application is approved and visible to donors. Your profile is now read-only.',
+    funded: 'Your medicine cost has been fully covered by donors. The hospital team will contact you about collection.',
+    rejected: 'Your application was not approved. Please contact the hospital administration team to know the reason and next steps.',
+  }[app.key];
 
   return (
-    <>
-      {/* CSS Animations */}
-      <style>
-        {`
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-          @media (min-width: 1024px) {
-            .content-grid { grid-template-columns: 2fr 1fr !important; }
-          }
-          @media (min-width: 640px) {
-            .card-content, .history-grid { grid-template-columns: repeat(2, 1fr) !important; }
-          }
-        `}
-      </style>
+    <div className="pd-page">
+      {/* Hero */}
+      <section id="pd-top" className="pd-hero">
+        <img src={HERO_IMAGE} alt="" className="pd-hero-img" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+        <div className="pd-hero-overlay" />
+        <div className="pd-hero-body">
+          <h1>Welcome back,<br /><span>{firstName}</span></h1>
+          <p>Manage your medical information, track your applications and be a part of a healthier, stronger community.</p>
+        </div>
+        <div className="pd-hero-badge" aria-hidden="true">
+          <Heart size={34} />
+          <p>Donate<br />Medicines<br />Save Lives</p>
+          <span />
+        </div>
+      </section>
 
-      <div style={styles.container}>
-
-        <main style={styles.mainContent}>
-          {/* Patient Header Section */}
-          <section style={styles.patientHeader}>
-            <div style={styles.patientHeaderContent}>
-              <div style={styles.patientAvatar}>
-                <img
-                  src={cloudinaryThumb(dpPreview || editpatient.image) || `https://ui-avatars.com/api/?name=${encodeURIComponent(patient.name || 'Patient')}&background=059669&color=fff&size=120`}
-                  alt="Patient"
-                  style={styles.avatarImage}
-                />
-                <div style={{
-                  ...styles.avatarBadge,
-                  ...(patient.approved ? styles.statusApproved : styles.statusPending)
-                }}>
-                  {patient.approved ? '✓' : '⏳'}
-                </div>
-              </div>
-
-              <div style={styles.patientInfo}>
-                <h1 style={styles.patientName}>{patient.name}</h1>
-
-                <div style={styles.patientMeta}>
-                  <div style={styles.metaItem}>
-                    <span style={styles.metaIcon}>📅</span>
-                    <span>Age: {patient.age || 'Not specified'}</span>
-                  </div>
-                  <div style={styles.metaItem}>
-                    <span style={styles.metaIcon}>👤</span>
-                    <span>{patient.gender || patient.sex || 'Gender not specified'}</span>
-                  </div>
-                  <div style={styles.metaItem}>
-                    <span style={styles.metaIcon}>📞</span>
-                    <span>{patient.mobile || 'Phone not provided'}</span>
-                  </div>
-                </div>
-
-                <div style={styles.patientId}>
-                  Patient ID: {patient.id || patient._id}
-                </div>
-
-                <div style={styles.patientActions}>
-                  {!patient.approved && (
-                    <button
-                      style={styles.primaryButton}
-                      onClick={() => document.getElementById('edit-form')?.scrollIntoView({ behavior: 'smooth' })}
-                      onMouseOver={(e) => Object.assign(e.target.style, styles.primaryButtonHover)}
-                      onMouseOut={(e) => Object.assign(e.target.style, styles.primaryButton)}
-                    >
-                      ✏️ Edit Profile
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Success/Error Messages */}
-          {success && (
-            <div style={{
-              backgroundColor: "#f0fdf4",
-              border: "1px solid #bbf7d0",
-              borderRadius: "8px",
-              padding: "1rem",
-              marginBottom: "1rem",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.75rem",
-            }}>
-              <span style={{ color: "#16a34a", fontSize: "20px" }}>✅</span>
-              <p style={{ fontSize: "0.875rem", color: "#166534", fontWeight: "500", margin: 0 }}>
-                {success}
-              </p>
-            </div>
+      {/* Profile summary + quick actions */}
+      <section id="pd-profile" className="pd-card pd-profile">
+        <div className="pd-profile-main">
+          {avatar ? (
+            <img src={avatar} alt={patient.name} className="pd-avatar" />
+          ) : (
+            <div className="pd-avatar pd-avatar-initials" aria-hidden="true">{initials(patient.name)}</div>
           )}
-
-          {error && (
-            <div style={styles.errorMessage}>
-              <span style={styles.errorIcon}>⚠️</span>
-              <p style={styles.errorText}>{error}</p>
+          <div className="pd-profile-info">
+            <div className="pd-profile-name">
+              <h2>{patient.name}</h2>
+              <span className="pd-chip is-green">Patient</span>
+              <span className={`pd-chip is-${{ pending: 'amber', approved: 'green', funded: 'green', rejected: 'red' }[app.key]}`}>
+                {app.label.charAt(0) + app.label.slice(1).toLowerCase()}
+              </span>
             </div>
-          )}
-
-          {/* Content Grid */}
-          <div style={styles.contentGrid} className="content-grid">
-
-            {/* Personal Information Card */}
-            <div style={styles.infoCard}>
-              <div style={styles.cardHeader}>
-                <div style={{
-                  ...styles.cardIcon,
-                  backgroundColor: "#dbeafe",
-                  color: "#1d4ed8"
-                }}>
-                  👤
-                </div>
-                <h3 style={styles.cardTitle}>Personal Information</h3>
-              </div>
-              <div style={styles.cardContent} className="card-content">
-                <div style={styles.formGroup}>
-                  <label style={styles.formLabel}>
-                    <span style={{ color: "#059669" }}>📧</span>
-                    Email Address
-                  </label>
-                  <input
-                    type="email"
-                    value={editpatient.email}
-                    style={{ ...styles.formInput, ...styles.readOnlyField }}
-                    readOnly
-                  />
-                </div>
-
-                <div style={styles.formGroup}>
-                  <label style={styles.formLabel}>
-                    <span style={{ color: "#059669" }}>📱</span>
-                    Mobile Number
-                  </label>
-                  <input
-                    type="tel"
-                    value={editpatient.mobile}
-                    onChange={(e) => handleInputChange('mobile', e.target.value)}
-                    style={patient.approved ? { ...styles.formInput, ...styles.readOnlyField } : styles.formInput}
-                    disabled={patient.approved}
-                    placeholder="Enter mobile number"
-                  />
-                </div>
-
-                <div style={styles.formGroup}>
-                  <label style={styles.formLabel}>
-                    <span style={{ color: "#059669" }}>⚤</span>
-                    Gender
-                  </label>
-                  <select
-                    value={editpatient.sex || ""}
-                    onChange={(e) => handleInputChange('sex', e.target.value)}
-                    style={patient.approved ? { ...styles.formSelect, ...styles.readOnlyField } : styles.formSelect}
-                    disabled={patient.approved}
-                  >
-                    <option value="">Select Gender</option>
-                    <option value="Male">Male</option>
-                    <option value="Female">Female</option>
-                    <option value="Other">Other</option>
-                  </select>
-                </div>
-
-                <div style={styles.formGroup}>
-                  <label style={styles.formLabel}>
-                    <span style={{ color: "#059669" }}>💕</span>
-                    Relationship Status
-                  </label>
-                  <select
-                    value={editpatient.relationshipstatus || ""}
-                    onChange={(e) => handleInputChange('relationshipstatus', e.target.value)}
-                    style={patient.approved ? { ...styles.formSelect, ...styles.readOnlyField } : styles.formSelect}
-                    disabled={patient.approved}
-                  >
-                    <option value="">Select Status</option>
-                    <option value="Single">Single</option>
-                    <option value="Married">Married</option>
-                    <option value="Divorced">Divorced</option>
-                    <option value="Widowed">Widowed</option>
-                  </select>
-                </div>
-              </div>
+            <div className="pd-profile-meta">
+              <span><Phone size={15} aria-hidden="true" /> {patient.mobile || 'Phone not provided'}</span>
+              <span><Mail size={15} aria-hidden="true" /> {patient.email}</span>
             </div>
-
-            {/* Medical Information Card */}
-            <div style={styles.infoCard}>
-              <div style={styles.cardHeader}>
-                <div style={{
-                  ...styles.cardIcon,
-                  backgroundColor: "#fef3c7",
-                  color: "#d97706"
-                }}>
-                  🏥
-                </div>
-                <h3 style={styles.cardTitle}>Medical Information</h3>
-              </div>
-              <div style={styles.cardContent} className="card-content">
-                <div style={styles.formGroup}>
-                  <label style={styles.formLabel}>
-                    <span style={{ color: "#dc2626" }}>🩺</span>
-                    Disease/Condition
-                  </label>
-                  <textarea
-                    value={patient.disease || ""}
-                    style={{ ...styles.formTextarea, ...styles.readOnlyField }}
-                    readOnly
-                    rows={3}
-                  />
-                </div>
-
-                <div style={styles.formGroup}>
-                  <label style={styles.formLabel}>
-                    <span style={{ color: "#059669" }}>💊</span>
-                    Prescribed Medicines
-                  </label>
-                  <textarea
-                    value={patient.medicines || ""}
-                    style={patient.approved ? { ...styles.formTextarea, ...styles.readOnlyField } : styles.formTextarea}
-                    disabled={patient.approved}
-                    rows={3}
-                    placeholder="List prescribed medicines"
-                  />
-                </div>
-
-                <div style={styles.formGroup}>
-                  <label style={styles.formLabel}>
-                    <span style={{ color: "#059669" }}>🏥</span>
-                    Hospital/Clinic
-                  </label>
-                  <input
-                    type="text"
-                    value={patient.hospitalname || patient.hospital || ""}
-                    style={{ ...styles.formInput, ...styles.readOnlyField }}
-                    readOnly
-                  />
-                </div>
-
-                <div style={styles.formGroup}>
-                  <label style={styles.formLabel}>
-                    <span style={{ color: "#059669" }}>👨‍⚕️</span>
-                    Doctor Name
-                  </label>
-                  <input
-                    type="text"
-                    value={patient.doctor || ""}
-                    style={{ ...styles.formInput, ...styles.readOnlyField }}
-                    readOnly
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Medical History */}
-            <div style={styles.medicalHistory}>
-              <div style={styles.historyHeader}>
-                <div style={styles.historyIcon}>📋</div>
-                <h3 style={styles.historyTitle}>Medical History</h3>
-              </div>
-              <div style={styles.historyGrid} className="history-grid">
-                <div style={styles.historyItem}>
-                  <div style={styles.historyLabel}>Admission Date</div>
-                  <div style={styles.historyValue}>{formatDate(patient.admissiondate)}</div>
-                </div>
-
-                <div style={styles.historyItem}>
-                  <div style={styles.historyLabel}>Discharge Date</div>
-                  <div style={styles.historyValue}>{formatDate(patient.dischargedate)}</div>
-                </div>
-
-                <div style={styles.historyItem}>
-                  <div style={styles.historyLabel}>Aadhar Number</div>
-                  <div style={styles.historyValue}>{patient.aadharno || 'Not provided'}</div>
-                </div>
-
-                <div style={styles.historyItem}>
-                  <div style={styles.historyLabel}>PAN Number</div>
-                  <div style={styles.historyValue}>{patient.panno || 'Not provided'}</div>
-                </div>
-
-                <div style={styles.historyItem}>
-                  <div style={styles.historyLabel}>Emergency Contact</div>
-                  <div style={styles.historyValue}>{patient.emergencyContact || 'Not provided'}</div>
-                </div>
-
-                <div style={styles.historyItem}>
-                  <div style={styles.historyLabel}>Zone/Area</div>
-                  <div style={styles.historyValue}>{patient.zone || 'Not specified'}</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Status Card */}
-            <div style={styles.statusCard}>
-              <div style={styles.statusHeader}>
-                <div style={{
-                  ...styles.statusIcon,
-                  backgroundColor: patient.approved ? "#f0fdf4" : "#fef3c7",
-                  color: patient.approved ? "#16a34a" : "#d97706"
-                }}>
-                  {patient.approved ? "✅" : "⏳"}
-                </div>
-                <h3 style={styles.statusTitle}>Application Status</h3>
-              </div>
-
-              <div style={{
-                ...styles.statusBadge,
-                ...(patient.approved ? styles.statusApproved : styles.statusPending)
-              }}>
-                {patient.approved ? "Approved" : "Pending Review"}
-              </div>
-
-              <p style={{
-                fontSize: "0.875rem",
-                color: "#64748b",
-                margin: "1rem 0 0 0",
-                lineHeight: "1.5"
-              }}>
-                {patient.approved
-                  ? "Your application has been approved. Your profile is now read-only and you can apply for medicine donations."
-                  : "Your application is under review. Once approved, you'll be able to edit your profile and apply for medicine donations."
-                }
-              </p>
-            </div>
-
-            {/* Editable Form Section */}
-            {!patient.approved && (
-              <div style={styles.infoCard} id="edit-form">
-                <div style={styles.cardHeader}>
-                  <div style={{
-                    ...styles.cardIcon,
-                    backgroundColor: "#e0f2fe",
-                    color: "#0277bd"
-                  }}>
-                    ✏️
-                  </div>
-                  <h3 style={styles.cardTitle}>Edit Profile Information</h3>
-                </div>
-
-                <form onSubmit={handleSubmit}>
-                  <div style={styles.cardContent} className="card-content">
-                    <div style={styles.formGroup}>
-                      <label style={styles.formLabel}>
-                        <span style={{ color: "#059669" }}>👤</span>
-                        Full Name
-                      </label>
-                      <input
-                        type="text"
-                        value={editpatient.name}
-                        onChange={(e) => handleInputChange('name', e.target.value)}
-                        style={styles.formInput}
-                        required
-                        placeholder="Enter full name"
-                      />
-                    </div>
-
-                    <div style={styles.formGroup}>
-                      <label style={styles.formLabel}>
-                        <span style={{ color: "#059669" }}>🎂</span>
-                        Age
-                      </label>
-                      <input
-                        type="number"
-                        value={editpatient.age}
-                        onChange={(e) => handleInputChange('age', e.target.value)}
-                        style={styles.formInput}
-                        min="1"
-                        max="150"
-                        placeholder="Enter age"
-                      />
-                    </div>
-
-                    <div style={styles.formGroup}>
-                      <label style={styles.formLabel}>
-                        <span style={{ color: "#059669" }}>🏠</span>
-                        Address
-                      </label>
-                      <textarea
-                        value={patient.address || ""}
-                        style={{ ...styles.formTextarea, ...styles.readOnlyField }}
-                        readOnly
-                        rows={3}
-                        placeholder="Address information"
-                      />
-                    </div>
-
-                    <div style={styles.formGroup}>
-                      <label style={styles.formLabel}>
-                        <span style={{ color: "#059669" }}>🖼️</span>
-                        Profile Picture
-                      </label>
-                      <div style={styles.fileUpload}>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={handleFileChange}
-                          style={styles.fileInput}
-                          id="profile-image"
-                        />
-                        <label
-                          htmlFor="profile-image"
-                          style={styles.fileLabel}
-                          onMouseOver={(e) => Object.assign(e.target.style, styles.fileLabelHover)}
-                          onMouseOut={(e) => Object.assign(e.target.style, styles.fileLabel)}
-                        >
-                          📎 Choose Image
-                        </label>
-                        {dpFile && (
-                          <span style={{
-                            marginLeft: "1rem",
-                            fontSize: "0.875rem",
-                            color: "#059669",
-                            fontWeight: "500"
-                          }}>
-                            ✓ {dpFile.name}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{
-                    marginTop: "2rem",
-                    paddingTop: "1rem",
-                    borderTop: "2px solid #f1f5f9",
-                    display: "flex",
-                    justifyContent: "flex-end",
-                    gap: "1rem"
-                  }}>
-                    <button
-                      type="submit"
-                      disabled={saving}
-                      style={{
-                        ...styles.primaryButton,
-                        opacity: saving ? 0.6 : 1,
-                        cursor: saving ? 'not-allowed' : 'pointer'
-                      }}
-                      onMouseOver={(e) => {
-                        if (!saving) Object.assign(e.target.style, styles.primaryButtonHover);
-                      }}
-                      onMouseOut={(e) => {
-                        if (!saving) Object.assign(e.target.style, styles.primaryButton);
-                      }}
-                    >
-                      {saving ? (
-                        <>
-                          <div style={{
-                            width: "16px",
-                            height: "16px",
-                            border: "2px solid rgba(255, 255, 255, 0.3)",
-                            borderTop: "2px solid #ffffff",
-                            borderRadius: "50%",
-                            animation: "spin 1s linear infinite",
-                            display: "inline-block",
-                            marginRight: "0.5rem"
-                          }}></div>
-                          Saving...
-                        </>
-                      ) : (
-                        <>💾 Save Changes</>
-                      )}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            )}
-
+            <p className="pd-profile-sub">
+              Age: {patient.age || 'Not specified'}
+              <span className="pd-sep">|</span>
+              Gender: {patient.gender || 'Not specified'}
+              <span className="pd-sep">|</span>
+              Blood: {patient.blood_group || '—'}
+            </p>
           </div>
-        </main>
+          <button type="button" className="pd-outline-btn" onClick={() => scrollTo('pd-edit')}>
+            <Pencil size={15} aria-hidden="true" /> {locked ? 'View Profile' : 'Edit Profile'}
+          </button>
+        </div>
+        <div className="pd-quick-grid">
+          <QuickAction icon={Pill} title={'My\nMedicines'} tone="green" onClick={() => scrollTo('pd-medical')} />
+          <QuickAction icon={HeartPulse} title={'Track\nApplication'} tone="blue" onClick={() => scrollTo('pd-status')} />
+          <QuickAction icon={ClipboardList} title={locked ? 'Medical\nHistory' : 'Update\nMedical Info'} tone="purple" onClick={() => scrollTo(locked ? 'pd-history' : 'pd-edit')} />
+        </div>
+      </section>
+
+      {error && <p className="pd-error" role="alert">{error}</p>}
+
+      {/* Medical information */}
+      <section id="pd-medical" className="pd-card">
+        <SectionTitle
+          icon={ClipboardList}
+          title="Medical Information"
+          subtitle="Current condition, treating doctor and prescription"
+          action={locked ? undefined : 'Edit'}
+          onAction={() => scrollTo('pd-edit')}
+        />
+        <div className="pd-tiles is-3">
+          <InfoTile icon={Stethoscope} label="Diagnosis / Condition" value={patient.disease || 'Not specified'} />
+          <InfoTile
+            icon={AlertTriangle}
+            label="Severity"
+            color={severityTone === 'red' ? 'pink' : severityTone === 'amber' ? 'orange' : severityTone}
+            value={patient.severity ? <span className={`pd-chip is-${severityTone}`}>{patient.severity}</span> : 'Not specified'}
+          />
+          <InfoTile icon={CalendarDays} label="Diagnosed On" value={formatDate(patient.diagnosis_date)} color="purple" />
+          <InfoTile icon={Droplet} label="Blood Group" value={patient.blood_group || 'Not specified'} color="pink" />
+          <InfoTile icon={ShieldAlert} label="Allergies" value={patient.allergies || 'Not specified'} color="orange" />
+          <InfoTile icon={Activity} label="Other Conditions" value={patient.chronic_conditions || 'None listed'} color="green" />
+          <InfoTile icon={Hospital} label="Hospital / Clinic" value={[patient.hospitalname, patient.hospital_address].filter(Boolean).join(' — ') || 'Not specified'} />
+          <InfoTile icon={UserRound} label="Treating Doctor" value={[patient.doctor, patient.doctor_phone].filter(Boolean).join(' · ') || 'Not specified'} color="green" />
+          <InfoTile icon={CalendarCheck} label="Next Appointment" value={appointment} color="purple" />
+        </div>
+
+        <div className="pd-subhead">
+          <h3><Pill size={16} aria-hidden="true" /> Prescribed Medicines</h3>
+          <span className="pd-cost">
+            <IndianRupee size={14} aria-hidden="true" />
+            Monthly cost: <strong>{Number(patient.estimated_cost) > 0 ? money(patient.estimated_cost) : 'Not given'}</strong>
+          </span>
+        </div>
+        {meds.length ? (
+          <div className="pd-table-wrap">
+            <table className="pd-table">
+              <thead>
+                <tr><th>#</th><th>Medicine</th><th>Dosage</th><th>Frequency</th><th>Duration</th><th>Quantity</th></tr>
+              </thead>
+              <tbody>
+                {meds.map((m, i) => (
+                  <tr key={`${m.name}-${i}`}>
+                    <td>{i + 1}</td>
+                    <td className="pd-med-name">{m.name}</td>
+                    <td>{m.dosage || '—'}</td>
+                    <td>{m.frequency || '—'}</td>
+                    <td>{m.duration || '—'}</td>
+                    <td>{m.quantity || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="pd-empty">No medicines added yet. Add the medicines from your prescription so donors know what you need.</p>
+        )}
+      </section>
+
+      <div className="pd-grid">
+        {/* Medical history */}
+        <section id="pd-history" className="pd-card">
+          <SectionTitle icon={FileText} title="Medical History" subtitle="Hospitalisation and past treatment" />
+          <div className="pd-tiles">
+            <InfoTile icon={CalendarDays} label="Admission Date" value={formatDate(patient.admissiondate)} />
+            <InfoTile icon={CalendarDays} label="Discharge Date" value={formatDate(patient.dischargedate)} color="green" />
+            <InfoTile icon={BedDouble} label="Hospital Stay" value={stayLength(patient.admissiondate, patient.dischargedate)} color="purple" />
+            <InfoTile icon={Activity} label="Treatment Status" value={patient.treatment_status || 'Not specified'} color="orange" />
+            <InfoTile icon={ClipboardList} label="Past Surgeries / Treatments" value={patient.past_surgeries || 'None listed'} color="pink" wide multiline />
+            <InfoTile icon={Users} label="Family Medical History" value={patient.family_history || 'None listed'} wide multiline />
+          </div>
+        </section>
+
+        {/* Application status */}
+        <section id="pd-status" className="pd-card">
+          <SectionTitle icon={Clock} title="Application Status" subtitle="Review progress and donations" />
+          <div className={`pd-status is-${app.key}`}>
+            <span className="pd-status-pill">{app.label}</span>
+            <p>{statusMessage}</p>
+            {app.key === 'rejected'
+              ? <XCircle className="pd-status-art" aria-hidden="true" />
+              : app.key === 'pending'
+                ? <ClipboardList className="pd-status-art" aria-hidden="true" />
+                : <BadgeCheck className="pd-status-art" aria-hidden="true" />}
+          </div>
+
+          <ol className="pd-steps">
+            {steps.map((s) => (
+              <li key={s.label} className={s.failed ? 'is-failed' : s.done ? 'is-done' : ''}>
+                <span className="pd-step-dot" aria-hidden="true">
+                  {s.failed ? <XCircle size={14} /> : s.done ? <Check size={14} /> : null}
+                </span>
+                <span className="pd-step-text">
+                  <strong>{s.label}</strong>
+                  {s.note && <small>{s.note}</small>}
+                </span>
+              </li>
+            ))}
+          </ol>
+
+          {app.amount > 0 && (
+            <div className="pd-funding">
+              <div className="pd-funding-row">
+                <span><Wallet size={15} aria-hidden="true" /> Raised {money(app.paid)}</span>
+                <span>Goal {money(app.amount)}</span>
+              </div>
+              <div className="pd-progress" role="progressbar" aria-valuenow={fundedPct} aria-valuemin={0} aria-valuemax={100} aria-label="Donations received">
+                <span style={{ width: `${fundedPct}%` }} />
+              </div>
+              <small>{fundedPct}% funded · {money(Math.max(0, app.amount - app.paid))} remaining</small>
+            </div>
+          )}
+
+          {app.key === 'pending' && missing.length > 0 && (
+            <div className="pd-missing">
+              <p><strong>{missing.length} item{missing.length === 1 ? '' : 's'} missing</strong> before review:</p>
+              <ul>{missing.map((m) => <li key={m.label}>{m.label}</li>)}</ul>
+              <button type="button" className="pd-link-btn" onClick={() => scrollTo('pd-edit')}>Complete profile →</button>
+            </div>
+          )}
+        </section>
+
+        {/* Personal & contact */}
+        <section id="pd-personal" className="pd-card pd-span-2">
+          <SectionTitle icon={IdCard} title="Personal & Contact" subtitle="Identity, address and emergency contact" />
+          <div className="pd-tiles is-3">
+            <InfoTile icon={CalendarDays} label="Date of Birth" value={formatDate(patient.birthday)} />
+            <InfoTile icon={Heart} label="Marital Status" value={patient.relationship || 'Not specified'} color="pink" />
+            <InfoTile icon={Briefcase} label="Occupation" value={patient.occupation || 'Not specified'} color="purple" />
+            <InfoTile icon={Wallet} label="Monthly Family Income" value={patient.monthly_income || 'Not specified'} color="green" />
+            <InfoTile icon={IdCard} label="Aadhaar Number" value={maskTail(patient.aadharno)} color="orange" />
+            <InfoTile icon={IdCard} label="PAN Number" value={maskTail(patient.panno)} color="pink" />
+            <InfoTile icon={MapPin} label="Address" value={fullAddress || 'Not provided'} wide multiline />
+            <InfoTile
+              icon={Phone}
+              label="Emergency Contact"
+              color="orange"
+              wide
+              value={patient.emergency_name
+                ? `${patient.emergency_name}${patient.emergency_relation ? ` (${patient.emergency_relation})` : ''}${patient.emergency_phone ? ` · ${patient.emergency_phone}` : ''}`
+                : 'Not provided'}
+            />
+          </div>
+        </section>
+
+        {/* Edit profile */}
+        <section id="pd-edit" className="pd-card pd-span-2">
+          <SectionTitle
+            icon={UserRound}
+            title="Edit Profile Information"
+            subtitle={locked ? 'Your profile is locked after approval' : 'Keep your personal and medical details up to date'}
+          />
+          {locked ? (
+            <div className="pd-locked">
+              <Lock size={20} aria-hidden="true" />
+              <p>Your application is approved, so profile and medical details can no longer be changed. Contact the hospital administration team if something needs correcting.</p>
+            </div>
+          ) : (
+            <PatientEditForm
+              key={saveCount}
+              patient={patient}
+              token={token}
+              onImagePreview={setDpPreview}
+              onSaved={(updated) => {
+                setPatient(updated);
+                setDpPreview(null);
+                setSaveCount((n) => n + 1);
+              }}
+            />
+          )}
+        </section>
       </div>
-    </>
+    </div>
   );
 }
-
-export default PatientDetails;

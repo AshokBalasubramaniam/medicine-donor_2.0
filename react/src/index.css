@@ -1856,6 +1856,13 @@ input[type="number"] {
   transform: none;
 }
 
+/* The portal dashboards don't use reveal-on-scroll; never let a leftover
+   `.reveal` class (e.g. from a hot reload) hide their content. */
+:is(.pd-shell, .dn-shell) .reveal {
+  opacity: 1;
+  transform: none;
+}
+
 /* Hover lift for cards */
 .feature-card,
 .step,
