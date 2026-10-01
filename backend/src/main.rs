@@ -9,7 +9,9 @@ use crate::routes::{payment_route, routes};
 use crate::state::init_state;
 use axum::Router;
 use std::net::SocketAddr;
-use tower_http::cors::{Any, CorsLayer};
+use axum::http::{header, HeaderName, HeaderValue, Method};
+use tower_http::cors::CorsLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -46,17 +48,42 @@ async fn main() -> anyhow::Result<()> {
         _ => {}
     }
 
+    utils::jwt::init_secrets()?;
     let state = init_state().await?;
+    utils::db::ensure_indexes(&state.db).await;
+    utils::db::run_migrations(&state.db).await;
 
-    let app = Router::new()
-        .merge(routes(state.clone())) // other app routes
-        .merge(payment_route()) // payment routes with separate Payment state
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        );
+    // Only the frontend's own origins may call the API from a browser.
+    // CORS_ORIGINS is a comma-separated list (default: the Vite dev server).
+    let origins: Vec<HeaderValue> = std::env::var("CORS_ORIGINS")
+        .unwrap_or_else(|_| "http://localhost:5173,http://127.0.0.1:5173".into())
+        .split(',')
+        .filter_map(|o| HeaderValue::from_str(o.trim()).ok())
+        .collect();
+    let cors = CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, HeaderName::from_static("x-requested-with")])
+        // The refresh-token cookie must travel when the frontend is on another origin.
+        .allow_credentials(true);
+
+    // Security headers on every API response (all JSON, never rendered as a page).
+    let security_headers = [
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        (header::X_FRAME_OPTIONS, "DENY"),
+        (header::REFERRER_POLICY, "no-referrer"),
+        (header::CONTENT_SECURITY_POLICY, "default-src 'none'; frame-ancestors 'none'"),
+        (header::STRICT_TRANSPORT_SECURITY, "max-age=31536000; includeSubDomains"),
+        (header::CACHE_CONTROL, "no-store"),
+    ];
+
+    let mut app = Router::new()
+        .merge(routes(state.clone()))
+        .merge(payment_route(state.db.clone())) // payment routes with their own state
+        .layer(cors);
+    for (name, value) in security_headers {
+        app = app.layer(SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value)));
+    }
 
     // Start server
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3000);

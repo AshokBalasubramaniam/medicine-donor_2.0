@@ -28,19 +28,46 @@ pub struct Claims {
     /// Whether the session was created with "remember me" (refresh tokens only).
     #[serde(default)]
     pub rem: bool,
+    /// The account's `token_version` when the token was issued. Bumping it
+    /// (password reset, session-theft detection) invalidates every
+    /// outstanding access token immediately.
+    #[serde(default)]
+    pub tv: i64,
     pub exp: usize,
     pub iat: usize,
 }
 
-fn access_secret() -> String {
-    std::env::var("JWT_SECRET").unwrap_or_else(|_| {
-        tracing::warn!("JWT_SECRET not set - using an insecure development secret");
-        "change_this_secret".to_string()
-    })
+static SECRETS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+
+/// Reads the signing secrets once at startup. Refuses to run without strong
+/// secrets: a guessable secret would let anyone forge admin tokens.
+pub fn init_secrets() -> anyhow::Result<()> {
+    let read = |key: &str| -> anyhow::Result<String> {
+        let v = std::env::var(key).unwrap_or_default();
+        if v.trim().len() < 32 {
+            anyhow::bail!("{key} must be set to a random value of at least 32 characters (see .env.example)");
+        }
+        Ok(v)
+    };
+    let access = read("JWT_SECRET")?;
+    let refresh = read("JWT_REFRESH_SECRET")?;
+    if access == refresh {
+        anyhow::bail!("JWT_SECRET and JWT_REFRESH_SECRET must be different");
+    }
+    let _ = SECRETS.set((access, refresh));
+    Ok(())
 }
 
-fn refresh_secret() -> String {
-    std::env::var("JWT_REFRESH_SECRET").unwrap_or_else(|_| format!("{}_refresh", access_secret()))
+fn secrets() -> &'static (String, String) {
+    SECRETS.get().expect("jwt::init_secrets() must run at startup")
+}
+
+fn access_secret() -> &'static str {
+    &secrets().0
+}
+
+fn refresh_secret() -> &'static str {
+    &secrets().1
 }
 
 fn sign(claims: &Claims, secret: &str) -> JwtResult<String> {
@@ -52,7 +79,7 @@ fn verify(token: &str, secret: &str) -> JwtResult<Claims> {
         .map(|data| data.claims)
 }
 
-pub fn create_access_token(user_id: &str, email: &str, role: &str) -> JwtResult<String> {
+pub fn create_access_token(user_id: &str, email: &str, role: &str, token_version: i64) -> JwtResult<String> {
     let now = Utc::now();
     let claims = Claims {
         sub: user_id.to_string(),
@@ -61,13 +88,14 @@ pub fn create_access_token(user_id: &str, email: &str, role: &str) -> JwtResult<
         typ: TOKEN_TYPE_ACCESS.to_string(),
         jti: uuid::Uuid::new_v4().to_string(),
         rem: false,
+        tv: token_version,
         exp: (now + Duration::minutes(ACCESS_TOKEN_MINUTES)).timestamp() as usize,
         iat: now.timestamp() as usize,
     };
-    sign(&claims, &access_secret())
+    sign(&claims, access_secret())
 }
 
-pub fn create_refresh_token(user_id: &str, email: &str, role: &str, remember: bool) -> JwtResult<String> {
+pub fn create_refresh_token(user_id: &str, email: &str, role: &str, remember: bool, token_version: i64) -> JwtResult<String> {
     let now = Utc::now();
     let days = if remember { REFRESH_TOKEN_DAYS_REMEMBER } else { REFRESH_TOKEN_DAYS };
     let claims = Claims {
@@ -77,20 +105,21 @@ pub fn create_refresh_token(user_id: &str, email: &str, role: &str, remember: bo
         typ: TOKEN_TYPE_REFRESH.to_string(),
         jti: uuid::Uuid::new_v4().to_string(),
         rem: remember,
+        tv: token_version,
         exp: (now + Duration::days(days)).timestamp() as usize,
         iat: now.timestamp() as usize,
     };
-    sign(&claims, &refresh_secret())
+    sign(&claims, refresh_secret())
 }
 
 /// Verifies an access token (signature, expiry and token type).
 pub fn verify_access_token(token: &str) -> Option<Claims> {
-    verify(token, &access_secret()).ok().filter(|c| c.typ == TOKEN_TYPE_ACCESS)
+    verify(token, access_secret()).ok().filter(|c| c.typ == TOKEN_TYPE_ACCESS)
 }
 
 /// Verifies a refresh token (signature, expiry and token type).
 pub fn verify_refresh_token(token: &str) -> Option<Claims> {
-    verify(token, &refresh_secret()).ok().filter(|c| c.typ == TOKEN_TYPE_REFRESH)
+    verify(token, refresh_secret()).ok().filter(|c| c.typ == TOKEN_TYPE_REFRESH)
 }
 
 /// Refresh tokens are stored hashed so a database leak does not leak sessions.

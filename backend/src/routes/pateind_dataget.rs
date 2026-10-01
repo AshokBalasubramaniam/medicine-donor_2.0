@@ -3,18 +3,9 @@ use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
 use serde_json::json;
 
 use crate::state::AppState;
+use crate::utils::strip_secrets;
 use crate::utils::auth::{AuthUser, Role};
 
-/// Fields that never leave the server.
-const HIDDEN_FIELDS: [&str; 7] = [
-    "password",
-    "refresh_tokens",
-    "otp",
-    "otp_hash",
-    "otp_expires_at",
-    "image_public_id",
-    "last_payment_id",
-];
 
 pub async fn get_patient_details(
     State(state): State<AppState>,
@@ -34,12 +25,13 @@ pub async fn get_patient_details(
     let mut patient = state
         .db
         .collection::<Document>("patients")
-        .find_one(doc! { "_id": obj_id }, None)
+        .find_one(doc! { "_id": obj_id })
         .await
         .map_err(|e| {
+            tracing::error!("patient profile lookup failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("DB error: {}", e)})),
+                Json(json!({"error": "Something went wrong. Please try again."})),
             )
         })?
         .ok_or((
@@ -47,9 +39,7 @@ pub async fn get_patient_details(
             Json(json!({"error": "Patient not found"})),
         ))?;
 
-    for field in HIDDEN_FIELDS {
-        patient.remove(field);
-    }
+    strip_secrets(&mut patient);
     patient.remove("_id");
 
     let mut resp = Bson::Document(patient).into_relaxed_extjson();

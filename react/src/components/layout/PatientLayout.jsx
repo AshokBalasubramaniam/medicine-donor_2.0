@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -70,7 +70,9 @@ export default function PatientLayout() {
     }
   }, [location.state, location.pathname, navigate]);
 
-  // Highlight the section currently in view.
+  // Highlight the section currently in view. Sections register themselves
+  // through `sectionRef` (outlet context) as they mount, so nothing polls.
+  const observerRef = useRef(null);
   useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
@@ -79,17 +81,15 @@ export default function PatientLayout() {
       },
       { rootMargin: "-80px 0px -60% 0px" }
     );
-    const timer = window.setInterval(() => {
-      const nodes = PATIENT_SECTIONS.map((s) => document.getElementById(s.id)).filter(Boolean);
-      if (nodes.length) {
-        nodes.forEach((n) => observer.observe(n));
-        window.clearInterval(timer);
-      }
-    }, 300);
+    observerRef.current = observer;
+    document.querySelectorAll(".pd-page section[id]").forEach((n) => observer.observe(n));
     return () => {
-      window.clearInterval(timer);
       observer.disconnect();
+      observerRef.current = null;
     };
+  }, []);
+  const sectionRef = useCallback((el) => {
+    if (el) observerRef.current?.observe(el);
   }, []);
 
   const goTo = (id) => {
@@ -191,7 +191,7 @@ export default function PatientLayout() {
         )}
 
         <main id="dash-content" className="pd-content" tabIndex={-1}>
-          <Outlet />
+          <Outlet context={{ sectionRef }} />
         </main>
       </div>
     </div>

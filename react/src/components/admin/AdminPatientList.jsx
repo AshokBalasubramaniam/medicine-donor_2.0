@@ -1,7 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
 import {
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   Eye,
   Hospital,
@@ -13,6 +15,7 @@ import {
   Stethoscope,
 } from 'lucide-react';
 import EditPatientModal from './EditPatientModal';
+import { adminListPatients } from '../../api';
 import {
   STATUS,
   amountOf,
@@ -25,17 +28,27 @@ import {
   missingOf,
   money,
   paidOf,
-  statusOf,
 } from './adminData';
 
+const PAGE = 24;
+
+// Sorting happens on the server (routes/admin_patients.rs).
 const SORTS = {
-  newest: { label: 'Newest first', fn: (a, b) => createdAt(b) - createdAt(a) },
-  oldest: { label: 'Oldest first', fn: (a, b) => createdAt(a) - createdAt(b) },
-  name: { label: 'Name (A–Z)', fn: (a, b) => (a.name || '').localeCompare(b.name || '') },
-  complete: { label: 'Most complete', fn: (a, b) => completeness(b) - completeness(a), only: 'pending' },
-  needed: { label: 'Most still needed', fn: (a, b) => (amountOf(b) - paidOf(b)) - (amountOf(a) - paidOf(a)), only: 'approved' },
-  funded: { label: 'Least funded', fn: (a, b) => fundedPct(a) - fundedPct(b), only: 'approved' },
+  newest: { label: 'Newest first' },
+  oldest: { label: 'Oldest first' },
+  name: { label: 'Name (A–Z)' },
+  needed: { label: 'Most still needed', only: ['approved', 'completed'] },
+  funded: { label: 'Least funded', only: ['approved'] },
 };
+
+function useDebounced(value, ms) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
 
 function PatientTile({ patient, status, onEdit }) {
   const id = idOf(patient);
@@ -96,36 +109,57 @@ function PatientTile({ patient, status, onEdit }) {
 }
 
 export default function AdminPatientList({ status }) {
-  const { patients, loading, error, reload } = useOutletContext();
+  const { reloadStats } = useOutletContext();
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('newest');
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState({ items: [], total: 0, pages: 0 });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [editing, setEditing] = useState(null);
+  const [version, setVersion] = useState(0);
+  const q = useDebounced(query.trim(), 300);
 
   const meta = STATUS[status];
-  const sorts = Object.entries(SORTS).filter(([, s]) => !s.only || s.only === status || (s.only === 'approved' && status === 'completed'));
-  const sortFn = (SORTS[sort] && sorts.some(([k]) => k === sort) ? SORTS[sort] : SORTS.newest).fn;
+  const sorts = Object.entries(SORTS).filter(([, s]) => !s.only || s.only.includes(status));
 
-  const list = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return patients
-      .filter((p) => statusOf(p) === status)
-      .filter((p) => !q || `${p.name} ${p.email} ${p.mobile} ${p.disease} ${p.hospitalname} ${p.town}`.toLowerCase().includes(q))
-      .sort(sortFn);
-  }, [patients, status, query, sortFn]);
+  // Back to the first page whenever the search or sort changes.
+  useEffect(() => setPage(1), [q, sort]);
 
-  const total = patients.filter((p) => statusOf(p) === status).length;
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError('');
+    adminListPatients({ status, q, sort, page, limit: PAGE }, controller.signal)
+      .then((res) => setData(res))
+      .catch((err) => {
+        if (!controller.signal.aborted) setError(err?.error || 'Couldn’t load patients. Please try again.');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [status, q, sort, page, version]);
+
+  const refresh = () => {
+    setVersion((v) => v + 1);
+    reloadStats?.();
+  };
+
+  const from = data.total ? (page - 1) * PAGE + 1 : 0;
+  const to = Math.min(page * PAGE, data.total);
 
   return (
     <div className="pd-page">
       <section className="pd-card ap-list-head">
         <div>
-          <h1>{meta.title} <span className="ap-count">{loading ? '…' : total}</span></h1>
+          <h1>{meta.title} <span className="ap-count">{loading && !data.total ? '…' : data.total}</span></h1>
           <p>{meta.blurb}</p>
         </div>
         <div className="ap-toolbar">
           <label className="ap-search">
             <Search size={16} aria-hidden="true" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, phone, condition, hospital…" aria-label="Search patients" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, email, phone, condition, hospital…" aria-label="Search patients" />
           </label>
           <select className="ap-select" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort">
             {sorts.map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
@@ -134,16 +168,32 @@ export default function AdminPatientList({ status }) {
       </section>
 
       {error ? (
-        <p className="pd-error" role="alert">{error} <button type="button" className="pd-link-btn" onClick={reload}>Try again</button></p>
-      ) : loading ? (
+        <p className="pd-error" role="alert">{error} <button type="button" className="pd-link-btn" onClick={refresh}>Try again</button></p>
+      ) : loading && !data.items.length ? (
         <div className="pd-state"><span className="spinner spinner-lg" aria-hidden="true" /><p>Loading patients…</p></div>
-      ) : list.length ? (
-        <div className="ap-grid">
-          {list.map((p) => <PatientTile key={idOf(p)} patient={p} status={status} onEdit={setEditing} />)}
-        </div>
+      ) : data.items.length ? (
+        <>
+          <div className={`ap-grid ${loading ? 'is-loading' : ''}`} aria-busy={loading}>
+            {data.items.map((p) => <PatientTile key={idOf(p)} patient={p} status={status} onEdit={setEditing} />)}
+          </div>
+          {data.pages > 1 && (
+            <nav className="ap-pager" aria-label="Pages">
+              <span>Showing {from}–{to} of {data.total}</span>
+              <div>
+                <button type="button" className="ap-btn is-small" onClick={() => setPage((n) => n - 1)} disabled={page <= 1 || loading}>
+                  <ChevronLeft size={15} aria-hidden="true" /> Previous
+                </button>
+                <span className="ap-page-no">Page {page} of {data.pages}</span>
+                <button type="button" className="ap-btn is-small" onClick={() => setPage((n) => n + 1)} disabled={page >= data.pages || loading}>
+                  Next <ChevronRight size={15} aria-hidden="true" />
+                </button>
+              </div>
+            </nav>
+          )}
+        </>
       ) : (
         <p className="pd-empty ap-empty">
-          {query ? 'No patients match your search.' : `No ${meta.label.toLowerCase()} patients right now.`}
+          {q ? 'No patients match your search.' : `No ${meta.label.toLowerCase()} patients right now.`}
         </p>
       )}
 
@@ -153,7 +203,7 @@ export default function AdminPatientList({ status }) {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
-            reload();
+            refresh();
           }}
         />
       )}

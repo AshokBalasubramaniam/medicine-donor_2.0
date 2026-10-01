@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, MapPin, RotateCcw, Search, Stethoscope } from 'lucide-react';
 import PatientCard from './PatientCard';
@@ -10,6 +10,9 @@ export default function PatientBrowser({ patients, loading, error, onRetry, init
   const [condition, setCondition] = useState('');
   const [place, setPlace] = useState('');
   const [sort, setSort] = useState(limit ? 'urgent' : 'recent');
+  // Full list shows 24 cards at a time; the overview preview passes `limit`.
+  const [shownCount, setShownCount] = useState(24);
+  useEffect(() => setShownCount(24), [query, condition, place, sort]);
 
   const conditions = useMemo(
     () => [...new Set(patients.map((p) => p.disease).filter(Boolean))].sort(),
@@ -31,7 +34,7 @@ export default function PatientBrowser({ patients, loading, error, onRetry, init
       .sort(SORTS[sort].fn);
   }, [patients, query, condition, place, sort]);
 
-  const shown = limit ? filtered.slice(0, limit) : filtered;
+  const shown = filtered.slice(0, limit || shownCount);
   const filtering = query || condition || place;
 
   return (
@@ -94,9 +97,18 @@ export default function PatientBrowser({ patients, loading, error, onRetry, init
           <button type="button" className="dn-primary-btn" onClick={onRetry}>Try again</button>
         </div>
       ) : shown.length ? (
-        <div className="dn-patient-grid">
-          {shown.map((p) => <PatientCard key={p.id} patient={p} />)}
-        </div>
+        <>
+          <div className="dn-patient-grid">
+            {shown.map((p) => <PatientCard key={p.id} patient={p} />)}
+          </div>
+          {!limit && filtered.length > shown.length && (
+            <div className="dn-more">
+              <button type="button" className="dn-outline-btn" onClick={() => setShownCount((n) => n + 24)}>
+                Show more ({filtered.length - shown.length} left)
+              </button>
+            </div>
+          )}
+        </>
       ) : (
         <div className="dn-empty">
           <Search size={28} aria-hidden="true" />

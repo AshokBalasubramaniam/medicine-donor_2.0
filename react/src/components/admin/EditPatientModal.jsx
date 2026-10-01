@@ -75,7 +75,7 @@ export default function EditPatientModal({ patient, onClose, onSaved }) {
     try {
       const data = new FormData();
       changed.forEach((k) => data.append(k, form[k].trim()));
-      await adminUpdatePatient(null, patient.id || patient._id, data);
+      await adminUpdatePatient(patient.id || patient._id, data);
       toast.success(`${form.name}’s details were updated.`, 'Changes saved');
       onSaved();
     } catch (err) {

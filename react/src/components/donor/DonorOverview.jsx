@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
 import { ArrowRight, HandHeart, Heart, Hospital, Users } from 'lucide-react';
-import donorImage from '../../assets/donorimage.png';
+import donorImage from '../../assets/donor-hero.webp';
 import PatientBrowser from './PatientBrowser';
 import { compactMoney, createdAt, greeting, money } from './donorData';
 
@@ -48,7 +48,7 @@ export default function DonorOverview() {
           </div>
         </div>
         <div className="dn-hero-image">
-          <img src={donorImage} alt="Illustration of people supporting each other with medicines" />
+          <img src={donorImage} width="900" height="600" decoding="async" fetchPriority="high" alt="Illustration of people supporting each other with medicines" />
           <div className="dn-impact-badge">
             <strong>{compactMoney(myTotal)}</strong>
             <span>donated by you</span>

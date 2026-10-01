@@ -16,8 +16,7 @@ import {
 import Alert from "../common/Alert";
 import { logout } from "../../store/authSlice";
 import { confirm, toast } from "../feedback/feedback";
-import { admingetallpatientdetails } from "../../api";
-import { statusOf } from "../admin/adminData";
+import { adminPatientStats } from "../../api";
 import "../patients/patient-dashboard.css";
 import "../admin/admin-edit.css";
 import "../admin/admin-portal.css";
@@ -49,26 +48,23 @@ export default function AdminLayout() {
   const [notice, setNotice] = useState(location.state?.notice || null);
   const [loggingOut, setLoggingOut] = useState(false);
 
-  // Patients are shared by every admin page through the outlet context.
-  const [patients, setPatients] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  // Summary counts (sidebar badge, overview tiles), shared through the outlet
+  // context. Lists fetch their own pages from the server.
+  const [stats, setStats] = useState(null);
+  const [statsError, setStatsError] = useState("");
 
-  const reload = useCallback(async () => {
-    setError("");
+  const reloadStats = useCallback(async () => {
+    setStatsError("");
     try {
-      const data = await admingetallpatientdetails();
-      setPatients(Array.isArray(data) ? data : []);
+      setStats(await adminPatientStats());
     } catch (err) {
-      setError(err?.error || "Couldn’t load patients. Please try again.");
-    } finally {
-      setLoading(false);
+      setStatsError(err?.error || "Couldn’t load the summary. Please try again.");
     }
   }, []);
 
   useEffect(() => {
-    reload();
-  }, [reload]);
+    reloadStats();
+  }, [reloadStats]);
 
   useEffect(() => {
     if (location.state?.notice) {
@@ -91,7 +87,7 @@ export default function AdminLayout() {
     document.title = `${current.label} · Medicine Donor Admin`;
   }, [current.label]);
 
-  const counts = { pending: patients.filter((p) => statusOf(p) === "pending").length };
+  const counts = stats?.counts || {};
 
   const onLogout = async () => {
     const ok = await confirm({
@@ -188,7 +184,7 @@ export default function AdminLayout() {
         )}
 
         <main id="dash-content" className="pd-content" tabIndex={-1}>
-          <Outlet context={{ patients, loading, error, reload }} />
+          <Outlet context={{ stats, statsError, reloadStats }} />
         </main>
       </div>
     </div>

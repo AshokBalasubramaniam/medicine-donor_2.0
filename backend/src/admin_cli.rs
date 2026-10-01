@@ -42,18 +42,16 @@ pub async fn create_admin(args: &[String]) -> anyhow::Result<()> {
     let coll = get_db().await?.collection::<Document>("adminpage");
 
     // Login matches emails case-insensitively, so do the same here.
-    let same_email = doc! { "$expr": { "$eq": [ { "$toLower": "$email" }, &email ] } };
+    let same_email = crate::utils::db::email_query(&email);
     let existing = coll
-        .find_one(same_email.clone(), None)
+        .find_one(same_email.clone())
         .await
         .context("could not read the adminpage collection")?;
 
     if existing.is_some() {
         coll.update_one(
             same_email,
-            doc! { "$set": { "password": &hashed, "name": &name }, "$unset": { "refresh_tokens": "" } },
-            None,
-        )
+            doc! { "$set": { "password": &hashed, "name": &name }, "$unset": { "refresh_tokens": "" } })
         .await
         .context("could not update the admin account")?;
         println!("Admin {email} already existed: password reset and signed out everywhere.");
@@ -64,9 +62,7 @@ pub async fn create_admin(args: &[String]) -> anyhow::Result<()> {
                 "email": &email,
                 "password": &hashed,
                 "created_at": DateTime::now(),
-            },
-            None,
-        )
+            })
         .await
         .context("could not create the admin account")?;
         println!("Admin {email} created. Log in at /login with this email and password.");

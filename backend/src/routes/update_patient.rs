@@ -1,12 +1,13 @@
 use crate::state::AppState;
 use crate::utils::auth::{AuthUser, Role};
 use axum::{
-    extract::{Multipart, State},
+    extract::{multipart::Field, Multipart, State},
     http::StatusCode,
     Json,
 };
 use chrono::NaiveDate;
 use mongodb::bson::{doc, oid::ObjectId, Bson, Document};
+use mongodb::Database;
 use serde_json::json;
 use crate::utils::cloudinary::upload_image;
 
@@ -121,7 +122,7 @@ fn prescription(doc: &mut Document, value: &str) -> FieldResult {
     Ok(())
 }
 
-fn apply_field(doc: &mut Document, name: &str, value: &str) -> FieldResult {
+pub(crate) fn apply_field(doc: &mut Document, name: &str, value: &str) -> FieldResult {
     match name {
         // Personal
         "name" => {
@@ -207,11 +208,50 @@ fn apply_field(doc: &mut Document, name: &str, value: &str) -> FieldResult {
     }
 }
 
+type Reply = (StatusCode, Json<serde_json::Value>);
+
+fn reply(code: StatusCode, message: impl Into<String>) -> Reply {
+    (code, Json(json!({ "error": message.into() })))
+}
+
+fn db_failure(context: &str, e: mongodb::error::Error) -> Reply {
+    tracing::error!("{context}: {e}");
+    reply(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong. Please try again.")
+}
+
+/// Reads an uploaded image field. A text "image" field (the current URL) is
+/// ignored; only files are uploaded.
+pub(crate) async fn read_image(field: Field<'_>) -> Result<Option<Vec<u8>>, Reply> {
+    if field.file_name().is_none() {
+        return Ok(None);
+    }
+    match field.bytes().await {
+        Ok(data) if !data.is_empty() => Ok(Some(data.to_vec())),
+        Ok(_) => Ok(None),
+        Err(_) => Err(reply(StatusCode::PAYLOAD_TOO_LARGE, "Image must be smaller than 5 MB")),
+    }
+}
+
+/// Whether another patient or donor already uses this phone number (phone
+/// numbers double as login identifiers, so they must stay unique).
+pub(crate) async fn phone_in_use(db: &Database, phone: &str, except: ObjectId) -> mongodb::error::Result<bool> {
+    if phone.is_empty() {
+        return Ok(false);
+    }
+    let filter = doc! { "_id": { "$ne": except }, "$or": [ { "mobile": phone }, { "phone": phone } ] };
+    let (patient_coll, donor_coll) = (db.collection::<Document>("patients"), db.collection::<Document>("donors"));
+    let (patients, donors) = tokio::try_join!(
+        patient_coll.count_documents(filter.clone()),
+        donor_coll.count_documents(filter),
+    )?;
+    Ok(patients + donors > 0)
+}
+
 pub async fn update_patient_handler(
     State(state): State<AppState>,
     user: AuthUser,
     mut multipart: Multipart,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> Reply {
     if let Err(denied) = user.require(&[Role::Patient]) {
         return denied;
     }
@@ -219,68 +259,48 @@ pub async fn update_patient_handler(
 
     // Patients can only ever update their own record: the id comes from the token.
     let Ok(obj_id) = ObjectId::parse_str(&user.id) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Patient id is required"})),
-        );
+        return reply(StatusCode::BAD_REQUEST, "Patient id is required");
     };
 
-    let current = match coll.find_one(doc! { "_id": obj_id }, None).await {
+    let current = match coll.find_one(doc! { "_id": obj_id }).await {
         Ok(Some(d)) => d,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(json!({"error": "Patient not found"})));
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("DB error: {}", e)})),
-            );
-        }
+        Ok(None) => return reply(StatusCode::NOT_FOUND, "Patient not found"),
+        Err(e) => return db_failure("update_patient_handler lookup", e),
     };
 
     // Approved applications are what donors see, so they can't be changed by the patient.
     if current.get_bool("approved").unwrap_or(false) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "Your application is approved, so your profile can no longer be edited"})),
-        );
+        return reply(StatusCode::FORBIDDEN, "Your application is approved, so your profile can no longer be edited");
     }
 
     let mut update_doc = doc! {};
     let mut image_bytes: Option<Vec<u8>> = None;
 
-    while let Ok(Some(field)) = multipart.next_field().await {
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(_) => return reply(StatusCode::BAD_REQUEST, "The form could not be read. Please try again."),
+        };
         let name = field.name().unwrap_or("").to_string();
-
         if name == "image" {
-            // A text "image" field (the current URL) is ignored; only files are uploaded.
-            if field.file_name().is_some() {
-                match field.bytes().await {
-                    Ok(data) if !data.is_empty() => image_bytes = Some(data.to_vec()),
-                    Ok(_) => {}
-                    Err(_) => {
-                        return (
-                            StatusCode::PAYLOAD_TOO_LARGE,
-                            Json(json!({"error": "Image must be smaller than 5 MB"})),
-                        );
-                    }
-                }
+            match read_image(field).await {
+                Ok(bytes) => image_bytes = bytes.or(image_bytes),
+                Err(e) => return e,
             }
             continue;
         }
-
-        let Ok(value) = field.text().await else { continue };
+        let Ok(value) = field.text().await else {
+            return reply(StatusCode::BAD_REQUEST, "The form could not be read. Please try again.");
+        };
         if name == "id" {
             if value != user.id {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({"error": "You can only update your own profile"})),
-                );
+                return reply(StatusCode::FORBIDDEN, "You can only update your own profile");
             }
             continue;
         }
         if let Err(message) = apply_field(&mut update_doc, &name, &value) {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": message})));
+            return reply(StatusCode::BAD_REQUEST, message);
         }
     }
 
@@ -294,10 +314,15 @@ pub async fn update_patient_handler(
     };
     if let (Some(admit), Some(discharge)) = (pick("admissiondate"), pick("dischargedate")) {
         if discharge < admit {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Discharge date can't be before the admission date"})),
-            );
+            return reply(StatusCode::BAD_REQUEST, "Discharge date can't be before the admission date");
+        }
+    }
+
+    if let Ok(mobile) = update_doc.get_str("mobile") {
+        match phone_in_use(&state.db, mobile, obj_id).await {
+            Ok(true) => return reply(StatusCode::CONFLICT, "Another account already uses this phone number"),
+            Ok(false) => {}
+            Err(e) => return db_failure("update_patient_handler phone check", e),
         }
     }
 
@@ -313,27 +338,12 @@ pub async fn update_patient_handler(
     }
 
     if update_doc.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "No fields provided"})),
-        );
+        return reply(StatusCode::BAD_REQUEST, "No fields provided");
     }
 
-    match coll
-        .update_one(doc! { "_id": obj_id }, doc! { "$set": update_doc }, None)
-        .await
-    {
-        Ok(res) if res.matched_count > 0 => (
-            StatusCode::OK,
-            Json(json!({"message": "Patient updated successfully"})),
-        ),
-        Ok(_) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "Patient not found"})),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("DB update error: {}", e)})),
-        ),
+    match coll.update_one(doc! { "_id": obj_id }, doc! { "$set": update_doc }).await {
+        Ok(res) if res.matched_count > 0 => (StatusCode::OK, Json(json!({ "message": "Patient updated successfully" }))),
+        Ok(_) => reply(StatusCode::NOT_FOUND, "Patient not found"),
+        Err(e) => db_failure("update_patient_handler", e),
     }
 }

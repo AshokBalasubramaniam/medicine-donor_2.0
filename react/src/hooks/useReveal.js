@@ -4,7 +4,7 @@ import { useEffect } from "react";
 // `box-shadow` selector picks up the card-like blocks of the older
 // inline-styled screens without having to edit each of them.
 const BLOCKS = ["[data-reveal]", ".card", "section", "article", "form", "table", '[style*="box-shadow"]'];
-const ITEMS = ["ul > li", "tbody > tr", ".doctor-item"];
+const ITEMS = ["ul > li", "tbody > tr"];
 const SELECTOR = [...BLOCKS, ...ITEMS].join(",");
 const SKIP = '[style*="position: fixed"], [style*="position: sticky"], [data-no-reveal]';
 

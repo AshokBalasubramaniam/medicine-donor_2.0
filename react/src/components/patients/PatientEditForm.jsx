@@ -45,7 +45,7 @@ function Select({ value, onChange, options, placeholder }) {
   );
 }
 
-export default function PatientEditForm({ patient, token, onSaved, onImagePreview }) {
+export default function PatientEditForm({ patient, onSaved, onImagePreview }) {
   const initialForm = useMemo(() => formFromPatient(patient), [patient]);
   const initialMeds = useMemo(() => prescriptionOf(patient), [patient]);
 
@@ -137,10 +137,10 @@ export default function PatientEditForm({ patient, token, onSaved, onImagePrevie
       if (medsChanged) formData.append('prescription', JSON.stringify(cleanMeds));
       if (dpFile) formData.append('image', dpFile);
 
-      await updatePatientDetails(token, formData);
+      await updatePatientDetails(formData);
       toast.success('Your details were updated.', 'Changes saved');
       setDpFile(null);
-      onSaved(await getPatientDetails(token));
+      onSaved(await getPatientDetails());
     } catch (err) {
       const message = err.error || 'Failed to update your details';
       setError(message);

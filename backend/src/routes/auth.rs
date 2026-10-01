@@ -5,8 +5,10 @@
 //! account is stored in determines the role that is signed into the JWT.
 
 use axum::{
+    body::Bytes,
     extract::{Json, State},
-    http::StatusCode,
+    http::{header::SET_COOKIE, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
@@ -15,19 +17,31 @@ use rand::Rng;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use std::time::Duration;
+
 use crate::{
-    routes::admin::send_otp_mail,
     state::AppState,
     utils::{
-        auth::{api_error, ApiError, AuthUser, Role},
-        jwt::{create_access_token, create_refresh_token, hash_token, verify_refresh_token},
-        password::{hash_password, verify_password},
+        auth::{api_error, forget_token_version, token_version, ApiError, AuthUser, Role},
+        jwt::{
+            create_access_token, create_refresh_token, hash_token, verify_refresh_token, REFRESH_TOKEN_DAYS_REMEMBER,
+        },
+        mail::send_otp_mail,
+        password::{dummy_hash, hash_password_async, verify_password_async},
+        rate_limit,
     },
 };
 
 /// Sessions (refresh tokens) kept per account; older ones are dropped.
 const MAX_SESSIONS: i32 = 5;
 const OTP_VALID_MINUTES: i64 = 10;
+/// Wrong codes allowed before a reset code is thrown away.
+const OTP_MAX_ATTEMPTS: i32 = 5;
+const FIFTEEN_MINUTES: Duration = Duration::from_secs(15 * 60);
+
+fn too_many() -> ApiError {
+    api_error(StatusCode::TOO_MANY_REQUESTS, "Too many attempts. Please wait a few minutes and try again.")
+}
 
 pub fn auth_routes(state: AppState) -> Router {
     Router::new()
@@ -43,20 +57,88 @@ pub fn auth_routes(state: AppState) -> Router {
 
 // ----------------------------------------------------------------- helpers
 
+/// The refresh token lives only in this HttpOnly cookie, so page scripts
+/// (and therefore XSS) can never read it. It is sent only to /api/auth.
+const REFRESH_COOKIE: &str = "mds_rt";
+
+fn env_flag(key: &str) -> Option<String> {
+    std::env::var(key).ok().map(|v| v.trim().to_ascii_lowercase()).filter(|v| !v.is_empty())
+}
+
+/// `Secure` unless COOKIE_SECURE=false (browsers treat http://localhost as
+/// secure, so the default works in development too).
+fn cookie_secure() -> bool {
+    env_flag("COOKIE_SECURE").as_deref() != Some("false")
+}
+
+/// SameSite=Strict by default. Set COOKIE_SAMESITE=none when the frontend
+/// and API are on different sites (requires HTTPS).
+fn cookie_same_site() -> &'static str {
+    match env_flag("COOKIE_SAMESITE").as_deref() {
+        Some("none") => "None",
+        Some("lax") => "Lax",
+        _ => "Strict",
+    }
+}
+
+fn cookie_attrs() -> String {
+    let secure = cookie_secure() || cookie_same_site() == "None";
+    format!("; Path=/api/auth; HttpOnly; SameSite={}{}", cookie_same_site(), if secure { "; Secure" } else { "" })
+}
+
+/// "Remember me" keeps the cookie for the refresh token's lifetime;
+/// otherwise it is a session cookie that ends when the browser closes.
+fn refresh_cookie(token: &str, remember: bool) -> String {
+    let max_age = if remember { format!("; Max-Age={}", REFRESH_TOKEN_DAYS_REMEMBER * 24 * 60 * 60) } else { String::new() };
+    format!("{REFRESH_COOKIE}={token}{max_age}{}", cookie_attrs())
+}
+
+fn clear_refresh_cookie() -> String {
+    format!("{REFRESH_COOKIE}=; Max-Age=0{}", cookie_attrs())
+}
+
+fn read_refresh_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(k, _)| *k == REFRESH_COOKIE)
+        .map(|(_, v)| v.to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Refresh and logout act on a cookie the browser attaches by itself, so
+/// they also require a header a cross-site form can't send (any cross-origin
+/// script sending it must pass a CORS preflight first).
+fn require_csrf_header(headers: &HeaderMap) -> Result<(), ApiError> {
+    match headers.get("x-requested-with").and_then(|v| v.to_str().ok()) {
+        Some(v) if v.eq_ignore_ascii_case("XMLHttpRequest") => Ok(()),
+        _ => Err(api_error(StatusCode::FORBIDDEN, "Missing X-Requested-With header")),
+    }
+}
+
+/// Refresh token from the cookie, or from a legacy JSON body
+/// (`{"refreshToken": ...}`) sent once by clients upgrading from storage.
+fn refresh_token_from(headers: &HeaderMap, body: &Bytes) -> Option<String> {
+    read_refresh_cookie(headers).or_else(|| {
+        serde_json::from_slice::<Value>(body)
+            .ok()?
+            .get("refreshToken")?
+            .as_str()
+            .map(str::to_string)
+            .filter(|t| !t.is_empty())
+    })
+}
+
+fn with_cookie(cookie: String, body: Value) -> Response {
+    ([(SET_COOKIE, cookie)], Json(body)).into_response()
+}
+
 fn server_error<E: std::fmt::Display>(e: E) -> ApiError {
     tracing::error!("auth error: {}", e);
     api_error(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong. Please try again.")
-}
-
-fn escape_regex(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if "\\^$.|?*+()[]{}".contains(c) {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
 }
 
 fn normalize_phone(s: &str) -> String {
@@ -73,9 +155,9 @@ fn is_valid_email(email: &str) -> bool {
     }
 }
 
-/// Case-insensitive exact email match (older records were stored as typed).
+/// Exact email match (see `utils::db::email_query` for the migration fallback).
 fn email_filter(email: &str) -> Document {
-    doc! { "email": { "$regex": format!("^{}$", escape_regex(email.trim())), "$options": "i" } }
+    crate::utils::db::email_query(email)
 }
 
 fn identifier_filter(identifier: &str) -> Document {
@@ -113,16 +195,16 @@ fn public_user(role: Role, d: &Document) -> Value {
 async fn check_password(state: &AppState, role: Role, d: &Document, password: &str) -> bool {
     let stored = d.get_str("password").unwrap_or("");
     if stored.starts_with("$argon2") {
-        return verify_password(password, stored).unwrap_or(false);
+        return verify_password_async(password, stored).await;
     }
     if stored.is_empty() || !constant_time_eq(stored.as_bytes(), password.as_bytes()) {
         return false;
     }
-    if let (Ok(id), Ok(hashed)) = (d.get_object_id("_id"), hash_password(password)) {
+    if let (Ok(id), Ok(hashed)) = (d.get_object_id("_id"), hash_password_async(password).await) {
         let _ = state
             .db
             .collection::<Document>(role.collection())
-            .update_one(doc! { "_id": id }, doc! { "$set": { "password": hashed } }, None)
+            .update_one(doc! { "_id": id }, doc! { "$set": { "password": hashed } })
             .await;
     }
     true
@@ -138,30 +220,29 @@ async fn issue_session(
     role: Role,
     d: &Document,
     remember: bool,
-) -> Result<Value, ApiError> {
+) -> Result<(Value, String), ApiError> {
     let id = d.get_object_id("_id").map_err(server_error)?;
     let email = d.get_str("email").unwrap_or("");
+    let version = token_version(d);
 
-    let access = create_access_token(&id.to_hex(), email, role.as_str()).map_err(server_error)?;
-    let refresh = create_refresh_token(&id.to_hex(), email, role.as_str(), remember).map_err(server_error)?;
+    let access = create_access_token(&id.to_hex(), email, role.as_str(), version).map_err(server_error)?;
+    let refresh = create_refresh_token(&id.to_hex(), email, role.as_str(), remember, version).map_err(server_error)?;
 
     state
         .db
         .collection::<Document>(role.collection())
         .update_one(
             doc! { "_id": id },
-            doc! { "$push": { "refresh_tokens": { "$each": [hash_token(&refresh)], "$slice": -MAX_SESSIONS } } },
-            None,
-        )
+            doc! { "$push": { "refresh_tokens": { "$each": [hash_token(&refresh)], "$slice": -MAX_SESSIONS } } })
         .await
         .map_err(server_error)?;
 
-    Ok(json!({
+    let body = json!({
         "success": true,
         "accessToken": access,
-        "refreshToken": refresh,
         "user": public_user(role, d),
-    }))
+    });
+    Ok((body, refresh_cookie(&refresh, remember)))
 }
 
 async fn email_taken(state: &AppState, email: &str) -> Result<bool, ApiError> {
@@ -169,7 +250,7 @@ async fn email_taken(state: &AppState, email: &str) -> Result<bool, ApiError> {
         let found = state
             .db
             .collection::<Document>(role.collection())
-            .find_one(email_filter(email), None)
+            .find_one(email_filter(email))
             .await
             .map_err(server_error)?;
         if found.is_some() {
@@ -184,7 +265,7 @@ async fn phone_taken(state: &AppState, phone: &str) -> Result<bool, ApiError> {
         let found = state
             .db
             .collection::<Document>(role.collection())
-            .find_one(doc! { "$or": [ { "mobile": phone }, { "phone": phone } ] }, None)
+            .find_one(doc! { "$or": [ { "mobile": phone }, { "phone": phone } ] })
             .await
             .map_err(server_error)?;
         if found.is_some() {
@@ -210,26 +291,40 @@ pub struct LoginInput {
 async fn login(
     State(state): State<AppState>,
     Json(input): Json<LoginInput>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let invalid = || api_error(StatusCode::UNAUTHORIZED, "Invalid email/phone or password");
 
     if input.identifier.trim().is_empty() || input.password.is_empty() {
         return Err(api_error(StatusCode::BAD_REQUEST, "Email/phone and password are required"));
     }
 
-    let filter = identifier_filter(&input.identifier);
-    for role in Role::ALL {
-        let found = state
-            .db
-            .collection::<Document>(role.collection())
-            .find_one(filter.clone(), None)
-            .await
-            .map_err(server_error)?;
+    if !rate_limit::allow("login", &input.identifier, 10, FIFTEEN_MINUTES) {
+        return Err(too_many());
+    }
 
-        if let Some(d) = found {
-            if check_password(&state, role, &d, &input.password).await {
-                return issue_session(&state, role, &d, input.remember_me).await.map(Json);
-            }
+    // Look the identifier up in every role collection at once.
+    let filter = identifier_filter(&input.identifier);
+    let lookups = Role::ALL.map(|role| {
+        let coll = state.db.collection::<Document>(role.collection());
+        let filter = filter.clone();
+        async move { coll.find_one(filter).await.map(|d| d.map(|d| (role, d))) }
+    });
+    let found: Vec<(Role, Document)> = futures::future::try_join_all(lookups)
+        .await
+        .map_err(server_error)?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    if found.is_empty() {
+        // Same Argon2 cost as a real account, so timing doesn't reveal which accounts exist.
+        let _ = verify_password_async(&input.password, dummy_hash()).await;
+        return Err(invalid());
+    }
+    for (role, d) in found {
+        if check_password(&state, role, &d, &input.password).await {
+            let (body, cookie) = issue_session(&state, role, &d, input.remember_me).await?;
+            return Ok(with_cookie(cookie, body));
         }
     }
     Err(invalid())
@@ -252,7 +347,7 @@ pub struct RegisterInput {
 async fn register(
     State(state): State<AppState>,
     Json(input): Json<RegisterInput>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
+) -> Result<Response, ApiError> {
     let name = input.name.trim();
     let email = input.email.trim().to_lowercase();
     let phone = normalize_phone(&input.phone);
@@ -289,7 +384,7 @@ async fn register(
         return Err(api_error(StatusCode::CONFLICT, "An account with this phone number already exists"));
     }
 
-    let hashed = hash_password(&input.password).map_err(server_error)?;
+    let hashed = hash_password_async(&input.password).await.map_err(server_error)?;
     let now = BsonDateTime::now();
 
     // Profile documents keep the shape the existing dashboards expect;
@@ -312,86 +407,83 @@ async fn register(
     };
 
     let coll = state.db.collection::<Document>(role.collection());
-    let inserted = coll.insert_one(&new_doc, None).await.map_err(server_error)?;
+    let inserted = coll.insert_one(&new_doc).await.map_err(server_error)?;
     let id = inserted.inserted_id.as_object_id().ok_or_else(|| server_error("missing inserted id"))?;
 
     let mut saved = new_doc;
     saved.insert("_id", id);
-    let body = issue_session(&state, role, &saved, false).await?;
-    Ok((StatusCode::CREATED, Json(body)))
+    let (body, cookie) = issue_session(&state, role, &saved, false).await?;
+    Ok((StatusCode::CREATED, [(SET_COOKIE, cookie)], Json(body)).into_response())
 }
 
 // ----------------------------------------------------------------- refresh
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RefreshInput {
-    pub refresh_token: String,
-}
-
-/// Rotates the refresh token. A valid-looking token that is no longer on
-/// record means it was already used (possible theft), so every session of
-/// that account is revoked.
-async fn refresh(
-    State(state): State<AppState>,
-    Json(input): Json<RefreshInput>,
-) -> Result<Json<Value>, ApiError> {
-    let expired = || api_error(StatusCode::UNAUTHORIZED, "Session expired. Please log in again.");
-
-    let claims = verify_refresh_token(&input.refresh_token).ok_or_else(expired)?;
-    let role = Role::from_str(&claims.role).ok_or_else(expired)?;
-    let id = ObjectId::parse_str(&claims.sub).map_err(|_| expired())?;
+async fn refresh(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let expired = || {
+        let (code, json) = api_error(StatusCode::UNAUTHORIZED, "Session expired. Please log in again.");
+        (code, [(SET_COOKIE, clear_refresh_cookie())], json).into_response()
+    };
+    if let Err(e) = require_csrf_header(&headers) {
+        return e.into_response();
+    }
+    let Some(token) = refresh_token_from(&headers, &body) else { return expired() };
+    let Some(claims) = verify_refresh_token(&token) else { return expired() };
+    let (Some(role), Ok(id)) = (Role::from_str(&claims.role), ObjectId::parse_str(&claims.sub)) else {
+        return expired();
+    };
     let coll = state.db.collection::<Document>(role.collection());
-    let token_hash = hash_token(&input.refresh_token);
+    let token_hash = hash_token(&token);
 
-    // Atomically consume the old token.
-    let consumed = coll
-        .update_one(
-            doc! { "_id": id, "refresh_tokens": &token_hash },
-            doc! { "$pull": { "refresh_tokens": &token_hash } },
-            None,
-        )
+    // Atomically consume the old token (single use).
+    let consumed = match coll
+        .update_one(doc! { "_id": id, "refresh_tokens": &token_hash }, doc! { "$pull": { "refresh_tokens": &token_hash } })
         .await
-        .map_err(server_error)?;
-
+    {
+        Ok(r) => r,
+        Err(e) => return server_error(e).into_response(),
+    };
     if consumed.matched_count == 0 {
+        // A valid but already-used token: likely stolen. End every session
+        // and invalidate outstanding access tokens.
         let _ = coll
-            .update_one(doc! { "_id": id }, doc! { "$set": { "refresh_tokens": [] } }, None)
+            .update_one(doc! { "_id": id }, doc! { "$set": { "refresh_tokens": [] }, "$inc": { "token_version": 1 } })
             .await;
-        return Err(expired());
+        forget_token_version(role, &claims.sub);
+        tracing::warn!("refresh token reuse detected for {} {}", role.as_str(), claims.sub);
+        return expired();
     }
 
     // Re-read the account so a deleted user cannot keep refreshing.
-    let d = coll
-        .find_one(doc! { "_id": id }, None)
-        .await
-        .map_err(server_error)?
-        .ok_or_else(expired)?;
-
-    issue_session(&state, role, &d, claims.rem).await.map(Json)
+    let d = match coll.find_one(doc! { "_id": id }).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return expired(),
+        Err(e) => return server_error(e).into_response(),
+    };
+    match issue_session(&state, role, &d, claims.rem).await {
+        Ok((body, cookie)) => with_cookie(cookie, body),
+        Err(e) => e.into_response(),
+    }
 }
 
 // ------------------------------------------------------------------ logout
 
-async fn logout(
-    State(state): State<AppState>,
-    Json(input): Json<RefreshInput>,
-) -> Json<Value> {
-    if let Some(claims) = verify_refresh_token(&input.refresh_token) {
-        if let (Some(role), Ok(id)) = (Role::from_str(&claims.role), ObjectId::parse_str(&claims.sub)) {
-            let _ = state
-                .db
-                .collection::<Document>(role.collection())
-                .update_one(
-                    doc! { "_id": id },
-                    doc! { "$pull": { "refresh_tokens": hash_token(&input.refresh_token) } },
-                    None,
-                )
-                .await;
+async fn logout(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    if let Err(e) = require_csrf_header(&headers) {
+        return e.into_response();
+    }
+    if let Some(token) = refresh_token_from(&headers, &body) {
+        if let Some(claims) = verify_refresh_token(&token) {
+            if let (Some(role), Ok(id)) = (Role::from_str(&claims.role), ObjectId::parse_str(&claims.sub)) {
+                let _ = state
+                    .db
+                    .collection::<Document>(role.collection())
+                    .update_one(doc! { "_id": id }, doc! { "$pull": { "refresh_tokens": hash_token(&token) } })
+                    .await;
+            }
         }
     }
     // Logging out always succeeds from the client's point of view.
-    Json(json!({ "success": true }))
+    with_cookie(clear_refresh_cookie(), json!({ "success": true }))
 }
 
 // ---------------------------------------------------------------------- me
@@ -402,7 +494,7 @@ async fn me(State(state): State<AppState>, user: AuthUser) -> Result<Json<Value>
     let d = state
         .db
         .collection::<Document>(user.role.collection())
-        .find_one(doc! { "_id": id }, None)
+        .find_one(doc! { "_id": id })
         .await
         .map_err(server_error)?
         .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "Account no longer exists"))?;
@@ -429,11 +521,15 @@ async fn forgot_password(
     if !is_valid_email(input.email.trim()) {
         return Err(api_error(StatusCode::BAD_REQUEST, "Please enter a valid email address"));
     }
+    // Throttled per email so the endpoint can't be used to flood an inbox.
+    if !rate_limit::allow("forgot", &input.email, 3, FIFTEEN_MINUTES) {
+        return Ok(generic);
+    }
 
     for role in Role::ALL {
         let coll = state.db.collection::<Document>(role.collection());
         let found = coll
-            .find_one(email_filter(&input.email), None)
+            .find_one(email_filter(&input.email))
             .await
             .map_err(server_error)?;
         if let Some(d) = found {
@@ -444,9 +540,7 @@ async fn forgot_password(
             let id = d.get_object_id("_id").map_err(server_error)?;
             coll.update_one(
                 doc! { "_id": id },
-                doc! { "$set": { "otp_hash": hash_token(&otp), "otp_expires_at": expires } },
-                None,
-            )
+                doc! { "$set": { "otp_hash": hash_token(&otp), "otp_expires_at": expires, "otp_attempts": 0 } })
             .await
             .map_err(server_error)?;
 
@@ -485,29 +579,59 @@ async fn reset_password(
         ));
     }
 
-    let hashed = hash_password(&input.new_password).map_err(server_error)?;
-    let mut filter = email_filter(&input.email);
-    filter.insert("otp_hash", hash_token(input.otp.trim()));
-    filter.insert("otp_expires_at", doc! { "$gt": BsonDateTime::now() });
+    if !rate_limit::allow("reset", &input.email, 10, FIFTEEN_MINUTES) {
+        return Err(too_many());
+    }
+    let invalid = || api_error(StatusCode::BAD_REQUEST, "The code is invalid or has expired");
 
+    // The account with a live reset code for this email.
+    let mut filter = email_filter(&input.email);
+    filter.insert("otp_expires_at", doc! { "$gt": BsonDateTime::now() });
+    let mut account = None;
     for role in Role::ALL {
-        let result = state
-            .db
-            .collection::<Document>(role.collection())
-            .update_one(
-                filter.clone(),
-                doc! {
-                    // A password reset also signs the account out everywhere.
-                    "$set": { "password": &hashed, "refresh_tokens": [] },
-                    "$unset": { "otp_hash": "", "otp_expires_at": "", "otp": "" },
-                },
-                None,
-            )
-            .await
-            .map_err(server_error)?;
-        if result.matched_count > 0 {
-            return Ok(Json(json!({ "success": true, "message": "Password updated. You can now log in." })));
+        let coll = state.db.collection::<Document>(role.collection());
+        if let Some(d) = coll.find_one(filter.clone()).await.map_err(server_error)? {
+            account = Some((role, coll, d));
+            break;
         }
     }
-    Err(api_error(StatusCode::BAD_REQUEST, "The code is invalid or has expired"))
+    let Some((role, coll, d)) = account else { return Err(invalid()) };
+    let id = d.get_object_id("_id").map_err(server_error)?;
+
+    let stored = d.get_str("otp_hash").unwrap_or("");
+    let given = hash_token(input.otp.trim());
+    if stored.is_empty() || !constant_time_eq(stored.as_bytes(), given.as_bytes()) {
+        // Count the wrong guess; after a few the code is discarded.
+        let attempts = d.get_i32("otp_attempts").unwrap_or(0) + 1;
+        let update = if attempts >= OTP_MAX_ATTEMPTS {
+            doc! { "$unset": { "otp_hash": "", "otp_expires_at": "", "otp_attempts": "" } }
+        } else {
+            doc! { "$inc": { "otp_attempts": 1 } }
+        };
+        coll.update_one(doc! { "_id": id }, update).await.map_err(server_error)?;
+        if attempts >= OTP_MAX_ATTEMPTS {
+            return Err(api_error(StatusCode::BAD_REQUEST, "Too many wrong codes. Please request a new code."));
+        }
+        return Err(invalid());
+    }
+
+    let hashed = hash_password_async(&input.new_password).await.map_err(server_error)?;
+    // Matching on the code again makes the reset single-use under concurrency.
+    let result = coll
+        .update_one(
+            doc! { "_id": id, "otp_hash": stored },
+            doc! {
+                // A password reset signs the account out everywhere: refresh
+                // tokens are dropped and outstanding access tokens rejected.
+                "$set": { "password": &hashed, "refresh_tokens": [] },
+                "$inc": { "token_version": 1 },
+                "$unset": { "otp_hash": "", "otp_expires_at": "", "otp": "", "otp_attempts": "" },
+            })
+        .await
+        .map_err(server_error)?;
+    if result.matched_count == 0 {
+        return Err(invalid());
+    }
+    forget_token_version(role, &id.to_hex());
+    Ok(Json(json!({ "success": true, "message": "Password updated. You can now log in." })))
 }

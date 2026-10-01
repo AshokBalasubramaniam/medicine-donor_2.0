@@ -4,8 +4,14 @@ use axum::{
     http::{header::AUTHORIZATION, request::Parts, StatusCode},
     Json,
 };
+use mongodb::bson::{doc, oid::ObjectId, Document};
+use mongodb::options::FindOneOptions;
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+use crate::state::get_db;
 use crate::utils::jwt::{verify_access_token, Claims};
 
 pub type ApiError = (StatusCode, Json<Value>);
@@ -96,8 +102,77 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthUser {
             .and_then(|v| v.strip_prefix("Bearer "))
             .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "Missing or invalid Authorization header"))?;
 
-        verify_access_token(token)
-            .and_then(AuthUser::from_claims)
-            .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "Invalid or expired token"))
+        let invalid = || api_error(StatusCode::UNAUTHORIZED, "Invalid or expired token");
+        let claims = verify_access_token(token).ok_or_else(invalid)?;
+        let version = claims.tv;
+        let user = AuthUser::from_claims(claims).ok_or_else(invalid)?;
+
+        // A token issued before the account's latest password reset (or
+        // session revocation) is rejected, as is one for a deleted account.
+        match current_token_version(user.role, &user.id).await {
+            Some(current) if current == version => Ok(user),
+            Some(_) => Err(api_error(StatusCode::UNAUTHORIZED, "Session expired. Please log in again.")),
+            None => Err(invalid()),
+        }
+    }
+}
+
+// ------------------------------------------------------ token version cache
+
+/// How long a looked-up `token_version` is trusted. Revocations made by this
+/// server take effect at once (the entry is dropped); ones made by another
+/// instance take effect within this window.
+const VERSION_TTL: Duration = Duration::from_secs(30);
+
+static VERSIONS: Mutex<Option<HashMap<String, (i64, Instant)>>> = Mutex::new(None);
+
+/// Reads `token_version` (missing = 0) whether stored as int32 or int64.
+pub fn token_version(d: &Document) -> i64 {
+    d.get_i64("token_version")
+        .or_else(|_| d.get_i32("token_version").map(i64::from))
+        .unwrap_or(0)
+}
+
+/// The account's current token version, or `None` if the account is gone.
+async fn current_token_version(role: Role, id: &str) -> Option<i64> {
+    let key = format!("{}:{id}", role.as_str());
+    {
+        let guard = VERSIONS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((v, at)) = guard.as_ref().and_then(|m| m.get(&key)) {
+            if at.elapsed() < VERSION_TTL {
+                return Some(*v);
+            }
+        }
+    }
+    let oid = ObjectId::parse_str(id).ok()?;
+    let db = get_db().await.ok()?;
+    let found = db
+        .collection::<Document>(role.collection())
+        .find_one(doc! { "_id": oid })
+        .with_options(FindOneOptions::builder().projection(doc! { "token_version": 1 }).build())
+        .await;
+    let d = match found {
+        Ok(d) => d?,
+        Err(e) => {
+            tracing::error!("token version lookup failed: {e}");
+            return None;
+        }
+    };
+    let v = token_version(&d);
+    let mut guard = VERSIONS.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    if map.len() > 50_000 {
+        map.clear();
+    }
+    map.insert(key, (v, Instant::now()));
+    Some(v)
+}
+
+/// Drop the cached version after bumping it, so this server rejects old
+/// tokens immediately.
+pub fn forget_token_version(role: Role, id: &str) {
+    let mut guard = VERSIONS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(map) = guard.as_mut() {
+        map.remove(&format!("{}:{id}", role.as_str()));
     }
 }

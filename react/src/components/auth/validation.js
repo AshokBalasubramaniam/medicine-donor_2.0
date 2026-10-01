@@ -2,7 +2,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const isEmail = (v = "") => EMAIL_RE.test(v.trim());
 
-export const phoneDigits = (v = "") => v.replace(/\D/g, "").length;
+const phoneDigits = (v = "") => v.replace(/\D/g, "").length;
 
 export const isPhone = (v = "") => /^[+\d][\d\s()-]*$/.test(v.trim()) && phoneDigits(v) >= 10 && phoneDigits(v) <= 15;
 

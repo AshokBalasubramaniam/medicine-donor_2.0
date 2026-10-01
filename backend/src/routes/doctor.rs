@@ -29,16 +29,6 @@ fn db_error<E: std::fmt::Display>(e: E) -> ApiError {
     api_error(StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong. Please try again.")
 }
 
-fn email_regex(email: &str) -> String {
-    let escaped: String = email
-        .chars()
-        .flat_map(|c| {
-            let special = "\\^$.|?*+()[]{}".contains(c);
-            special.then_some('\\').into_iter().chain(std::iter::once(c))
-        })
-        .collect();
-    format!("^{}$", escaped)
-}
 
 /// Validates a doctor payload and returns the fields to store.
 /// Field names match the documents already stored in this collection.
@@ -94,14 +84,14 @@ fn doctor_fields(payload: Result<Json<DoctorInput>, JsonRejection>) -> Result<Do
 }
 
 async fn email_in_use(state: &AppState, email: &str, except: Option<ObjectId>) -> Result<bool, ApiError> {
-    let mut filter = doc! { "email": { "$regex": email_regex(email), "$options": "i" } };
+    let mut filter = crate::utils::db::email_query(email);
     if let Some(id) = except {
         filter.insert("_id", doc! { "$ne": id });
     }
     let found = state
         .db
         .collection::<Document>(COLLECTION)
-        .find_one(filter, None)
+        .find_one(filter)
         .await
         .map_err(db_error)?;
     Ok(found.is_some())
@@ -127,7 +117,7 @@ pub async fn register_doctor_handler(
     let res = state
         .db
         .collection::<Document>(COLLECTION)
-        .insert_one(fields, None)
+        .insert_one(fields)
         .await
         .map_err(db_error)?;
     let id = res.inserted_id.as_object_id().map(|o| o.to_hex()).unwrap_or_default();
@@ -155,7 +145,7 @@ pub async fn update_doctor(
     let res = state
         .db
         .collection::<Document>(COLLECTION)
-        .update_one(doc! { "_id": id }, doc! { "$set": fields }, None)
+        .update_one(doc! { "_id": id }, doc! { "$set": fields })
         .await
         .map_err(db_error)?;
     if res.matched_count == 0 {
@@ -174,7 +164,7 @@ pub async fn delete_doctor(
     let res = state
         .db
         .collection::<Document>(COLLECTION)
-        .delete_one(doc! { "_id": id }, None)
+        .delete_one(doc! { "_id": id })
         .await
         .map_err(db_error)?;
     if res.deleted_count == 0 {
@@ -187,7 +177,7 @@ pub async fn list_doctors(State(state): State<AppState>, user: AuthUser) -> Resu
     user.require(&[Role::Admin])?;
     let coll = state.db.collection::<Document>(COLLECTION);
     let docs: Vec<Document> = coll
-        .find(None, None)
+        .find(doc! {})
         .await
         .map_err(db_error)?
         .try_collect()

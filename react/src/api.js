@@ -1,19 +1,23 @@
 import axios from "axios";
-import { tokenStorage } from "./auth/tokenStorage";
+import { legacySession, sessionHint } from "./auth/tokenStorage";
 
 // Backend origin, e.g. https://medicine-donor-api.onrender.com (set in
 // .env / the hosting dashboard). Empty in development: requests go to
 // /api and Vite proxies them to the local backend (see vite.config.js).
 const API_ORIGIN = (import.meta.env.VITE_API_URL || "").trim().replace(/\/+$/, "");
-export const API_BASE_URL = `${API_ORIGIN}/api`;
+const API_BASE_URL = `${API_ORIGIN}/api`;
 
 const API = axios.create({ baseURL: API_BASE_URL });
 
 // Separate client for token endpoints so they never go through the
-// refresh-and-retry interceptor below.
+// refresh-and-retry interceptor below. `withCredentials` sends the HttpOnly
+// refresh cookie (also when the API is on another origin), and the
+// X-Requested-With header is required by the API for cookie-based calls
+// (a cross-site form can't send it).
 const AUTH = axios.create({
   baseURL: `${API_BASE_URL}/auth`,
-  headers: { "Content-Type": "application/json" },
+  withCredentials: true,
+  headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
 });
 
 // ---------------------------------------------------------------------------
@@ -69,10 +73,12 @@ function tokenExpiresSoon(token, withinSeconds = 30) {
 let refreshInFlight = null;
 
 async function doRefresh() {
-  const refreshToken = tokenStorage.getRefreshToken();
-  if (!refreshToken) throw { status: 401, error: "Not signed in" };
-  const { data } = await AUTH.post("/refresh", { refreshToken });
-  tokenStorage.update({ refreshToken: data.refreshToken, user: data.user });
+  // The refresh token travels in the HttpOnly cookie. A token stored by an
+  // older build is sent once so the server can move it into the cookie.
+  const legacy = legacySession.token();
+  const { data } = await AUTH.post("/refresh", legacy ? { refreshToken: legacy } : {});
+  legacySession.clear();
+  sessionHint.mark();
   auth.onRefreshed({ accessToken: data.accessToken, user: data.user });
   return data.accessToken;
 }
@@ -96,7 +102,7 @@ export function refreshSession() {
         // network blip should not sign the user out.
         const rejected = err?.status === 401 || [400, 401, 403].includes(err?.response?.status);
         if (rejected) {
-          tokenStorage.clear();
+          sessionHint.clear();
           auth.onExpired();
         }
         throw err?.response || err?.request ? normalizeError(err) : err;
@@ -113,7 +119,7 @@ export function refreshSession() {
 // to expire.
 API.interceptors.request.use(async (config) => {
   let token = auth.getAccessToken();
-  if (token && tokenExpiresSoon(token) && tokenStorage.getRefreshToken()) {
+  if (token && tokenExpiresSoon(token) && sessionHint.has()) {
     try {
       token = await refreshSession();
     } catch {
@@ -136,7 +142,7 @@ API.interceptors.response.use(
       error?.response?.status === 401 &&
       original &&
       !original._retried &&
-      tokenStorage.getRefreshToken()
+      sessionHint.has()
     ) {
       original._retried = true;
       try {
@@ -170,8 +176,8 @@ export const authApi = {
       throw normalizeError(err);
     }
   },
-  async logout(refreshToken) {
-    await AUTH.post("/logout", { refreshToken });
+  async logout() {
+    await AUTH.post("/logout", {});
   },
   async me() {
     const { data } = await API.get("/auth/me");
@@ -196,10 +202,10 @@ export const authApi = {
 };
 
 // ------------------------------------------------------------ app endpoints
-// The `token` parameters are kept for compatibility with existing screens;
-// the request interceptor always sends the current access token.
+// The request interceptor attaches the current access token to every call.
 
-export const admingetallpatientdetails = async () => {
+// Open, approved cases for donors (donor-safe fields only).
+export const getOpenCases = async () => {
   const res = await API.get("/adminpage/getpatients");
   return res.data;
 };
@@ -209,14 +215,22 @@ export const getPatientDetails = async () => {
   return res.data;
 };
 
-export const updatePatientDetails = async (_token, updatedData) => {
+export const updatePatientDetails = async (updatedData) => {
   // FormData: let the browser set the multipart boundary.
   const res = await API.put("/patientdetails/update", updatedData);
   return res.data;
 };
 
-export const admingetpatientdetails = async () => {
-  const res = await API.get("/adminpage/patients");
+
+/** One page of patients for the admin lists (filtered and sorted server-side). */
+export const adminListPatients = async ({ status, q = "", sort = "newest", page = 1, limit = 24 }, signal) => {
+  const res = await API.get("/adminpage/patients", { params: { status, q, sort, page, limit }, signal });
+  return res.data;
+};
+
+/** Counts per status plus money raised / still needed. */
+export const adminPatientStats = async () => {
+  const res = await API.get("/adminpage/stats");
   return res.data;
 };
 
@@ -225,10 +239,6 @@ export const getPatientById = async (id) => {
   return res.data;
 };
 
-export const updatePatient = async (id, data) => {
-  const res = await API.put(`/adminpage/patients/${id}`, data);
-  return res.data;
-};
 
 export const registerdoctor = async (payload) => {
   const res = await API.post("/admin/registerdoctor", payload, {
@@ -252,14 +262,14 @@ export const deleteDoctor = async (id) => {
   return res.data;
 };
 
-export const adminUpdatePatient = async (_token, id, payload) => {
+export const adminUpdatePatient = async (id, payload) => {
   const res = await API.put(`/admin/updatepatient/${id}`, payload, {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return res.data;
 };
 
-export async function createOrder(_token, amount_rupees, patient_id) {
+export async function createOrder(amount_rupees, patient_id) {
   const res = await API.post("/create_order", { amount_rupees, patient_id });
   return res.data;
 }
@@ -269,7 +279,7 @@ export const getMyDonations = async () => {
   return res.data;
 };
 
-export async function verifyPayment(_token, payload) {
+export async function verifyPayment(payload) {
   const res = await API.post("/verify_payment", payload);
   return res.data;
 }

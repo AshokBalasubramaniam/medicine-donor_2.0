@@ -34,7 +34,7 @@ function initialForm(p) {
 export default function AdminReview() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { reload } = useOutletContext();
+  const { reloadStats } = useOutletContext();
   const [patient, setPatient] = useState(null);
   const [form, setForm] = useState(null);
   const [error, setError] = useState('');
@@ -109,12 +109,12 @@ export default function AdminReview() {
       }
       data.append('approved', approve ? 'true' : 'false');
       data.append('rejected', approve ? 'false' : 'true');
-      await adminUpdatePatient(null, id, data);
+      await adminUpdatePatient(id, data);
       toast.success(
         approve ? `${form.name} is now visible to donors.` : 'The application was rejected.',
         approve ? 'Application approved' : 'Application rejected'
       );
-      reload();
+      reloadStats();
       navigate(approve ? '/admin/patients/approved' : '/admin/patients/rejected');
     } catch (e) {
       setError(e?.error || 'Please try again.');

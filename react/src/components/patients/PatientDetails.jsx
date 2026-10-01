@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useSelector } from 'react-redux';
-import { useNavigate } from 'react-router-dom';
+import { useOutletContext } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
@@ -140,9 +139,8 @@ function QuickAction({ icon: Icon, title, tone, onClick }) {
 }
 
 export default function PatientDetails() {
-  const navigate = useNavigate();
-  const token = useSelector((state) => state.auth?.token);
 
+  const { sectionRef } = useOutletContext() || {};
   const [patient, setPatient] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -150,24 +148,26 @@ export default function PatientDetails() {
   // Bumped after each save so the edit form re-initialises from fresh data.
   const [saveCount, setSaveCount] = useState(0);
 
+  // Loaded once; the route guard handles auth and the API client refreshes
+  // tokens itself, so a token rotation doesn't need a re-fetch.
   useEffect(() => {
-    if (!token) {
-      navigate('/login');
-      return;
-    }
+    let alive = true;
     (async () => {
       setLoading(true);
       setError('');
       try {
-        setPatient(await getPatientDetails(token));
+        const data = await getPatientDetails();
+        if (alive) setPatient(data);
       } catch (err) {
-        console.error('Fetch details error:', err);
-        setError(err.error || 'Failed to fetch patient details');
+        if (alive) setError(err.error || 'Failed to fetch patient details');
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
     })();
-  }, [token, navigate]);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   if (loading && !patient) {
     return (
@@ -230,7 +230,7 @@ export default function PatientDetails() {
   return (
     <div className="pd-page">
       {/* Hero */}
-      <section id="pd-top" className="pd-hero">
+      <section id="pd-top" className="pd-hero" ref={sectionRef}>
         <img src={HERO_IMAGE} alt="" className="pd-hero-img" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
         <div className="pd-hero-overlay" />
         <div className="pd-hero-body">
@@ -245,7 +245,7 @@ export default function PatientDetails() {
       </section>
 
       {/* Profile summary + quick actions */}
-      <section id="pd-profile" className="pd-card pd-profile">
+      <section id="pd-profile" className="pd-card pd-profile" ref={sectionRef}>
         <div className="pd-profile-main">
           {avatar ? (
             <img src={avatar} alt={patient.name} className="pd-avatar" />
@@ -286,7 +286,7 @@ export default function PatientDetails() {
       {error && <p className="pd-error" role="alert">{error}</p>}
 
       {/* Medical information */}
-      <section id="pd-medical" className="pd-card">
+      <section id="pd-medical" className="pd-card" ref={sectionRef}>
         <SectionTitle
           icon={ClipboardList}
           title="Medical Information"
@@ -345,7 +345,7 @@ export default function PatientDetails() {
 
       <div className="pd-grid">
         {/* Medical history */}
-        <section id="pd-history" className="pd-card">
+        <section id="pd-history" className="pd-card" ref={sectionRef}>
           <SectionTitle icon={FileText} title="Medical History" subtitle="Hospitalisation and past treatment" />
           <div className="pd-tiles">
             <InfoTile icon={CalendarDays} label="Admission Date" value={formatDate(patient.admissiondate)} />
@@ -358,7 +358,7 @@ export default function PatientDetails() {
         </section>
 
         {/* Application status */}
-        <section id="pd-status" className="pd-card">
+        <section id="pd-status" className="pd-card" ref={sectionRef}>
           <SectionTitle icon={Clock} title="Application Status" subtitle="Review progress and donations" />
           <div className={`pd-status is-${app.key}`}>
             <span className="pd-status-pill">{app.label}</span>
@@ -407,7 +407,7 @@ export default function PatientDetails() {
         </section>
 
         {/* Personal & contact */}
-        <section id="pd-personal" className="pd-card pd-span-2">
+        <section id="pd-personal" className="pd-card pd-span-2" ref={sectionRef}>
           <SectionTitle icon={IdCard} title="Personal & Contact" subtitle="Identity, address and emergency contact" />
           <div className="pd-tiles is-3">
             <InfoTile icon={CalendarDays} label="Date of Birth" value={formatDate(patient.birthday)} />
@@ -430,7 +430,7 @@ export default function PatientDetails() {
         </section>
 
         {/* Edit profile */}
-        <section id="pd-edit" className="pd-card pd-span-2">
+        <section id="pd-edit" className="pd-card pd-span-2" ref={sectionRef}>
           <SectionTitle
             icon={UserRound}
             title="Edit Profile Information"
@@ -445,7 +445,6 @@ export default function PatientDetails() {
             <PatientEditForm
               key={saveCount}
               patient={patient}
-              token={token}
               onImagePreview={setDpPreview}
               onSaved={(updated) => {
                 setPatient(updated);

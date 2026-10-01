@@ -83,7 +83,7 @@ async fn connect() -> anyhow::Result<Database> {
     let db = client.database(&database_name);
 
     // Fail at startup with a clear message instead of on the first request.
-    db.run_command(doc! { "ping": 1 }, None).await.with_context(|| {
+    db.run_command(doc! { "ping": 1 }).await.with_context(|| {
         format!("could not connect to MongoDB with the X.509 certificate {}", cert_key.display())
     })?;
     tracing::info!(

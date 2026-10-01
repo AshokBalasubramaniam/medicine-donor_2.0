@@ -1,30 +1,36 @@
-import React from "react";
+import React, { Suspense, lazy } from "react";
 import { BrowserRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 
 import LandingPage from "./pages/LandingPage";
 import LoginPage from "./pages/LoginPage";
-import RegisterPage from "./pages/RegisterPage";
-import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
 import PublicOnlyRoute from "./components/routing/PublicOnlyRoute";
 import RoleBasedRoute from "./components/routing/RoleBasedRoute";
-import AdminLayout from "./components/layout/AdminLayout";
-import PatientLayout from "./components/layout/PatientLayout";
+import PageLoader from "./components/common/PageLoader";
 import { ROLES } from "./auth/roles";
 import FeedbackHost from "./components/feedback/FeedbackHost";
 
-import PatientDetails from "./components/patients/PatientDetails";
-import DonorLayout from "./components/layout/DonorLayout";
-import DonorOverview from "./components/donor/DonorOverview";
-import PatientsInNeed from "./components/donor/PatientsInNeed";
-import MakeDonation from "./components/donor/MakeDonation";
-import MyDonations from "./components/donor/MyDonations";
-import AdminOverview from "./components/admin/AdminOverview";
-import AdminPatientList from "./components/admin/AdminPatientList";
-import AdminReview from "./components/admin/AdminReview";
-import AdminPatientDetails from "./components/admin/adminPatientDetails";
-import Doctor from "./components/admin/Doctor";
+// Each portal is its own chunk, so visitors only download the screens
+// (and CSS) for their own role. Landing and login stay in the main bundle.
+const RegisterPage = lazy(() => import("./pages/RegisterPage"));
+const ForgotPasswordPage = lazy(() => import("./pages/ForgotPasswordPage"));
+
+const PatientLayout = lazy(() => import("./components/layout/PatientLayout"));
+const PatientDetails = lazy(() => import("./components/patients/PatientDetails"));
+
+const DonorLayout = lazy(() => import("./components/layout/DonorLayout"));
+const DonorOverview = lazy(() => import("./components/donor/DonorOverview"));
+const PatientsInNeed = lazy(() => import("./components/donor/PatientsInNeed"));
+const MakeDonation = lazy(() => import("./components/donor/MakeDonation"));
+const MyDonations = lazy(() => import("./components/donor/MyDonations"));
+
+const AdminLayout = lazy(() => import("./components/layout/AdminLayout"));
+const AdminOverview = lazy(() => import("./components/admin/AdminOverview"));
+const AdminPatientList = lazy(() => import("./components/admin/AdminPatientList"));
+const AdminReview = lazy(() => import("./components/admin/AdminReview"));
+const AdminPatientDetails = lazy(() => import("./components/admin/adminPatientDetails"));
+const Doctor = lazy(() => import("./components/admin/Doctor"));
 
 // Old per-portal URLs, kept so existing bookmarks still land somewhere sensible.
 const LEGACY_REDIRECTS = {
@@ -43,6 +49,7 @@ const LEGACY_REDIRECTS = {
 export default function App() {
   return (
     <Router>
+      <Suspense fallback={<PageLoader fullScreen />}>
       <Routes>
         <Route path="/" element={<LandingPage />} />
 
@@ -90,6 +97,7 @@ export default function App() {
 
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
+      </Suspense>
       <FeedbackHost />
     </Router>
   );

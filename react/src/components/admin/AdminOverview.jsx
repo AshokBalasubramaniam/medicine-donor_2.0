@@ -11,7 +11,7 @@ import {
   Trophy,
   XCircle,
 } from 'lucide-react';
-import { getAllPayments, listDoctors } from '../../api';
+import { adminListPatients, getAllPayments, listDoctors } from '../../api';
 import {
   amountOf,
   completeness,
@@ -22,7 +22,6 @@ import {
   initials,
   money,
   paidOf,
-  statusOf,
 } from './adminData';
 
 function StatTile({ icon: Icon, label, value, note, tone, to }) {
@@ -55,30 +54,38 @@ function PanelHead({ icon: Icon, title, subtitle, to, action }) {
 }
 
 export default function AdminOverview() {
-  const { patients, loading, error, reload } = useOutletContext();
+  const { stats, statsError, reloadStats } = useOutletContext();
   const [payments, setPayments] = useState([]);
   const [doctorCount, setDoctorCount] = useState(null);
+  // Only the rows these panels show are fetched (the server sorts and limits).
+  const [pending, setPending] = useState([]);
+  const [funding, setFunding] = useState([]);
+  const [listsLoading, setListsLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
-      const [pay, docs] = await Promise.all([
+      const [pay, docs, pend, open] = await Promise.all([
         getAllPayments().catch(() => []),
         listDoctors().catch(() => null),
+        adminListPatients({ status: 'pending', sort: 'newest', limit: 5 }).catch(() => null),
+        adminListPatients({ status: 'approved', sort: 'funded', limit: 5 }).catch(() => null),
       ]);
       setPayments(Array.isArray(pay) ? pay : []);
       setDoctorCount(Array.isArray(docs) ? docs.length : null);
+      setPending(pend?.items || []);
+      setFunding(open?.items || []);
+      setListsLoading(false);
     })();
   }, []);
 
-  const by = (s) => patients.filter((p) => statusOf(p) === s);
-  const pending = by('pending').sort((a, b) => createdAt(b) - createdAt(a));
-  const approved = by('approved');
-  const completed = by('completed');
-  const rejected = by('rejected');
-  const raised = patients.reduce((sum, p) => sum + paidOf(p), 0);
-  const stillNeeded = approved.reduce((sum, p) => sum + Math.max(0, amountOf(p) - paidOf(p)), 0);
-  const ready = pending.filter((p) => completeness(p) === 100).length;
-  const funding = [...approved].sort((a, b) => fundedPct(a) - fundedPct(b)).slice(0, 5);
+  const loading = !stats && !statsError;
+  const counts = stats?.counts || {};
+  const pendingCount = counts.pending || 0;
+  const raised = stats?.raised || 0;
+  const stillNeeded = stats?.still_needed || 0;
+  const ready = stats?.ready || 0;
+  const error = statsError;
+  const reload = reloadStats;
   const today = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
@@ -90,8 +97,8 @@ export default function AdminOverview() {
           <p>
             {loading
               ? 'Loading the latest applications…'
-              : pending.length
-                ? `${pending.length} application${pending.length === 1 ? ' is' : 's are'} waiting for review${ready ? ` — ${ready} ${ready === 1 ? 'has' : 'have'} every required detail filled in` : ''}.`
+              : pendingCount
+                ? `${pendingCount} application${pendingCount === 1 ? ' is' : 's are'} waiting for review${ready ? ` — ${ready} ${ready === 1 ? 'has' : 'have'} every required detail filled in` : ''}.`
                 : 'You’re all caught up — there are no applications waiting for review.'}
           </p>
           <div className="ap-hero-actions">
@@ -116,10 +123,10 @@ export default function AdminOverview() {
       )}
 
       <section className="ap-stats" aria-label="Summary">
-        <StatTile icon={Clock} tone="amber" label="Pending review" value={loading ? '—' : pending.length} note={ready ? `${ready} ready to approve` : 'Awaiting details'} to="/admin/patients/pending" />
-        <StatTile icon={CheckCircle2} tone="green" label="Approved & open" value={loading ? '—' : approved.length} note={`${money(stillNeeded)} still needed`} to="/admin/patients/approved" />
-        <StatTile icon={Trophy} tone="blue" label="Fully funded" value={loading ? '—' : completed.length} note="Completed cases" to="/admin/patients/completed" />
-        <StatTile icon={XCircle} tone="red" label="Rejected" value={loading ? '—' : rejected.length} note="Can be re-reviewed" to="/admin/patients/rejected" />
+        <StatTile icon={Clock} tone="amber" label="Pending review" value={loading ? '—' : pendingCount} note={ready ? `${ready} ready to approve` : 'Awaiting details'} to="/admin/patients/pending" />
+        <StatTile icon={CheckCircle2} tone="green" label="Approved & open" value={loading ? '—' : counts.approved || 0} note={`${money(stillNeeded)} still needed`} to="/admin/patients/approved" />
+        <StatTile icon={Trophy} tone="blue" label="Fully funded" value={loading ? '—' : counts.completed || 0} note="Completed cases" to="/admin/patients/completed" />
+        <StatTile icon={XCircle} tone="red" label="Rejected" value={loading ? '—' : counts.rejected || 0} note="Can be re-reviewed" to="/admin/patients/rejected" />
         <StatTile icon={HandCoins} tone="purple" label="Total raised" value={money(raised)} note={`${payments.length} donation${payments.length === 1 ? '' : 's'}`} />
         <StatTile icon={Stethoscope} tone="teal" label="Doctors" value={doctorCount ?? '—'} note="Registered" to="/admin/doctors" />
       </section>
@@ -129,7 +136,7 @@ export default function AdminOverview() {
           <PanelHead icon={ClipboardCheck} title="Needs review" subtitle="Newest applications first" to="/admin/patients/pending" action="View all" />
           {pending.length ? (
             <ul className="ap-rows">
-              {pending.slice(0, 5).map((p) => {
+              {pending.map((p) => {
                 const pct = completeness(p);
                 return (
                   <li key={idOf(p)}>
@@ -145,7 +152,7 @@ export default function AdminOverview() {
               })}
             </ul>
           ) : (
-            <p className="pd-empty">{loading ? 'Loading…' : 'No applications waiting for review.'}</p>
+            <p className="pd-empty">{listsLoading ? 'Loading…' : 'No applications waiting for review.'}</p>
           )}
         </section>
 
@@ -169,7 +176,7 @@ export default function AdminOverview() {
               })}
             </ul>
           ) : (
-            <p className="pd-empty">{loading ? 'Loading…' : 'No open cases right now.'}</p>
+            <p className="pd-empty">{listsLoading ? 'Loading…' : 'No open cases right now.'}</p>
           )}
         </section>
 

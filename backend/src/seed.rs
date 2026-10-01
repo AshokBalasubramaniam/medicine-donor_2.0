@@ -1,6 +1,6 @@
 //! Test data for local testing.
 //!
-//! `cargo run -- seed-test-data`  replaces any previous test data with
+//! `ALLOW_SEED=1 cargo run -- seed-test-data`  replaces any previous test data with
 //!                                10 doctors, 10 patients, 10 donors and
 //!                                matching donation records.
 //! `cargo run -- clear-test-data` removes it again.
@@ -28,7 +28,7 @@ async fn clear(db: &Database) -> anyhow::Result<u64> {
     for name in COLLECTIONS {
         removed += db
             .collection::<Document>(name)
-            .delete_many(doc! { "test_seed": true }, None)
+            .delete_many(doc! { "test_seed": true })
             .await
             .with_context(|| format!("could not clear test data from {name}"))?
             .deleted_count;
@@ -271,6 +271,10 @@ fn donation_docs(patients: &[(ObjectId, &PatientSeed)], donors: &[(ObjectId, Str
 }
 
 pub async fn seed_test_data() -> anyhow::Result<()> {
+    // Known passwords: never seed by accident (e.g. against production).
+    if std::env::var("ALLOW_SEED").ok().as_deref() != Some("1") {
+        anyhow::bail!("Refusing to seed test accounts with a known password. Run with ALLOW_SEED=1 on a test database.");
+    }
     let db = get_db().await?;
     let cleared = clear(&db).await?;
     if cleared > 0 {
@@ -279,20 +283,20 @@ pub async fn seed_test_data() -> anyhow::Result<()> {
     let hash = hash_password(TEST_PASSWORD).map_err(|e| anyhow::anyhow!("hashing failed: {e}"))?;
 
     db.collection::<Document>("Doctors")
-        .insert_many(doctors(), None)
+        .insert_many(doctors())
         .await
         .context("could not insert doctors")?;
 
     let donor_docs = donors(&hash);
     let donor_names: Vec<String> = donor_docs.iter().map(|d| d.get_str("name").unwrap_or("").to_string()).collect();
-    let res = db.collection::<Document>("donors").insert_many(donor_docs, None).await.context("could not insert donors")?;
+    let res = db.collection::<Document>("donors").insert_many(donor_docs).await.context("could not insert donors")?;
     let mut donor_ids: Vec<(usize, ObjectId)> =
         res.inserted_ids.iter().filter_map(|(k, v)| v.as_object_id().map(|o| (*k, o))).collect();
     donor_ids.sort_by_key(|(k, _)| *k);
     let donors: Vec<(ObjectId, String)> = donor_ids.into_iter().map(|(k, o)| (o, donor_names[k].clone())).collect();
 
     let patient_docs: Vec<Document> = PATIENTS.iter().enumerate().map(|(i, p)| patient_doc(i, p, &hash)).collect();
-    let res = db.collection::<Document>("patients").insert_many(patient_docs, None).await.context("could not insert patients")?;
+    let res = db.collection::<Document>("patients").insert_many(patient_docs).await.context("could not insert patients")?;
     let mut ids: Vec<(usize, ObjectId)> = res.inserted_ids.iter().filter_map(|(k, v)| v.as_object_id().map(|o| (*k, o))).collect();
     ids.sort_by_key(|(k, _)| *k);
     let patients: Vec<(ObjectId, &PatientSeed)> = ids.into_iter().map(|(k, o)| (o, &PATIENTS[k])).collect();
@@ -300,7 +304,7 @@ pub async fn seed_test_data() -> anyhow::Result<()> {
     let donations = donation_docs(&patients, &donors);
     let donation_count = donations.len();
     if !donations.is_empty() {
-        db.collection::<Document>("donations").insert_many(donations, None).await.context("could not insert donations")?;
+        db.collection::<Document>("donations").insert_many(donations).await.context("could not insert donations")?;
     }
 
     println!("Seeded 10 doctors, 10 donors, 10 patients and {donation_count} donations.");

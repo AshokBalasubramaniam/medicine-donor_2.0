@@ -684,38 +684,6 @@ a.ap-stat:hover {
   font-size: 12px;
 }
 
-/* Doctors page (existing component, restyled inside the admin shell) */
-
-.ap-shell .page {
-  max-width: 1480px;
-  margin: 0 auto;
-  padding: 20px;
-}
-
-.ap-shell .page-head h1 {
-  color: #08245a;
-  font-size: 22px;
-}
-
-.ap-shell .page-head p {
-  color: #64748b;
-}
-
-.ap-shell .card.panel {
-  border: 1px solid #f1f5f9;
-  border-radius: 16px;
-  box-shadow: 0 2px 10px rgba(15, 40, 80, 0.04);
-}
-
-.ap-shell .panel-head h2 {
-  color: #08245a;
-}
-
-.ap-shell .doctor-item {
-  border-radius: 12px;
-  background: #f5f8fc;
-}
-
 /* Doctors page */
 
 .ap-doc-toolbar {
@@ -857,4 +825,36 @@ a.ap-stat:hover {
   .ap-stats {
     grid-template-columns: 1fr;
   }
+}
+
+/* Server-side pagination */
+
+.ap-grid.is-loading {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.ap-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid #f1f5f9;
+  border-radius: 14px;
+  background: #fff;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.ap-pager > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ap-page-no {
+  color: #08245a;
+  font-weight: 600;
 }

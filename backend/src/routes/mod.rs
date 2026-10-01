@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod admin_patients;
 pub mod auth;
 pub mod doctor;
 pub mod get_all_pateints_details;
@@ -27,7 +28,7 @@ pub fn routes(state: AppState) -> Router {
 
 }
 
-pub fn payment_route() -> Router {
+pub fn payment_route(db: mongodb::Database) -> Router {
     let env = |k: &str| {
         std::env::var(k).unwrap_or_else(|_| {
             tracing::warn!("{} is not set - donations will fail", k);
@@ -37,8 +38,8 @@ pub fn payment_route() -> Router {
     let payment_state = Payment {
         razor_key_id: env("RAZORPAY_KEY_ID"),
         razor_key_secret: env("RAZORPAY_KEY_SECRET"),
-        http_client: reqwest::Client::new(), 
-        
+        http_client: reqwest::Client::new(),
+        db,
     };
 
     Router::new().nest("/api", payment_routes(payment_state))

@@ -1,18 +1,13 @@
-use crate::models::donation::Donation;
-use crate::state::{get_db, AppState};
-use axum::{
-    extract::State,
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use futures::StreamExt;
 use mongodb::{
     bson::{doc, oid::ObjectId, Bson, DateTime, Document},
     options::UpdateOptions,
-    Database,
-};                                                    
-use anyhow::Result;
+    Collection, Database,
+};
 use serde_json::json;
+
+use crate::state::AppState;
 use crate::utils::auth::{AuthUser, Role};
 
 // ======================= ROUTES ============================
@@ -24,67 +19,58 @@ pub fn donation_routes(state: AppState) -> Router {
 }
 
 // ======================= SAVE DONATION =====================
+
+/// Records one confirmed payment: one document per donor/patient pair, with
+/// every payment kept in `payments`.
 pub async fn save_donation(
+    db: &Database,
     donor_name: &str,
-    donor_id: &str,
+    donor_id: ObjectId,
     patient_name: &str,
-    patient_id: &str,
+    patient_id: ObjectId,
     payment_id: &str,
     amount: i64,
-) -> Result<()> {
-    let db: Database = get_db().await?;
-    let coll = db.collection::<Donation>("donations");
-
-    let donor_obj = ObjectId::parse_str(donor_id)?;
-    let patient_obj = ObjectId::parse_str(patient_id)?;
-
-    coll.update_one(
-        doc! {
-            "donor_id": &donor_obj,
-            "patient_id": &patient_obj
-        },
-        doc! {
-            "$set": {
-                "donor_name": donor_name,
-                "patient_name": patient_name,
-                "payment_id": payment_id,
-            },
-            // `$push` creates the arrays on insert, so no `$setOnInsert` for them
-            // (setting and pushing the same path in one update is rejected).
-            "$push": {
-                "amount": amount,
-                "payments": { "amount": amount, "payment_id": payment_id, "paid_at": DateTime::now() },
-            },
-        },
-        UpdateOptions::builder().upsert(true).build(),
-    )
-    .await?;
-
-    println!("✅ Donation saved: donor={} patient={} amount={}", donor_name, patient_name, amount);
+) -> mongodb::error::Result<()> {
+    db.collection::<Document>("donations")
+        .update_one(
+            doc! { "donor_id": donor_id, "patient_id": patient_id },
+            doc! {
+                "$set": {
+                    "donor_name": donor_name,
+                    "patient_name": patient_name,
+                    "payment_id": payment_id,
+                },
+                // `$push` creates the arrays on insert, so no `$setOnInsert` for them
+                // (setting and pushing the same path in one update is rejected).
+                "$push": {
+                    "amount": amount,
+                    "payments": { "amount": amount, "payment_id": payment_id, "paid_at": DateTime::now() },
+                },
+            }).with_options(UpdateOptions::builder().upsert(true).build())
+        .await?;
+    tracing::info!("donation saved: donor={donor_id} patient={patient_id} amount={amount}");
     Ok(())
 }
 
 // ======================= GET DONATIONS ====================
 
-
-use mongodb::{Collection};
-use futures::StreamExt;
 pub async fn get_donations(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     user.require(&[Role::Admin])?;
     let db_err = |e: mongodb::error::Error| {
+        tracing::error!("donations query failed: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("DB error: {}", e)})),
+            Json(json!({"error": "Something went wrong. Please try again."})),
         )
     };
 
     // One row per payment, newest first. Older records without a `payments`
     // list fall back to their `amount` entries (no dates).
     let coll: Collection<Document> = state.db.collection("donations");
-    let mut cursor = coll.find(None, None).await.map_err(db_err)?;
+    let mut cursor = coll.find(doc! {}).await.map_err(db_err)?;
     let mut rows = vec![];
     while let Some(result) = cursor.next().await {
         let d = result.map_err(db_err)?;
@@ -135,14 +121,15 @@ pub async fn get_my_donations(
         (StatusCode::BAD_REQUEST, Json(json!({"error": "Invalid user id in token"})))
     })?;
     let db_err = |e: mongodb::error::Error| {
+        tracing::error!("donations query failed: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("DB error: {}", e)})),
+            Json(json!({"error": "Something went wrong. Please try again."})),
         )
     };
 
     let coll: Collection<Document> = state.db.collection("donations");
-    let mut cursor = coll.find(doc! { "donor_id": donor_id }, None).await.map_err(db_err)?;
+    let mut cursor = coll.find(doc! { "donor_id": donor_id }).await.map_err(db_err)?;
 
     let mut out = vec![];
     while let Some(result) = cursor.next().await {

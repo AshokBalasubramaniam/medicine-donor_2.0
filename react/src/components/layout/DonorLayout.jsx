@@ -5,7 +5,7 @@ import { HandHeart, HeartHandshake, LayoutGrid, LogOut, Menu, Phone, Search, Use
 import Alert from "../common/Alert";
 import { logout } from "../../store/authSlice";
 import { confirm, toast } from "../feedback/feedback";
-import { admingetallpatientdetails, getMyDonations } from "../../api";
+import { getOpenCases, getMyDonations } from "../../api";
 import "../donor/donor-dashboard.css";
 
 const NAV = [
@@ -49,7 +49,7 @@ export default function DonorLayout() {
   const reload = useCallback(async () => {
     setError("");
     try {
-      const [p, d] = await Promise.all([admingetallpatientdetails(), getMyDonations().catch(() => [])]);
+      const [p, d] = await Promise.all([getOpenCases(), getMyDonations().catch(() => [])]);
       setPatients(Array.isArray(p) ? p : []);
       setDonations(Array.isArray(d) ? d : []);
     } catch (err) {

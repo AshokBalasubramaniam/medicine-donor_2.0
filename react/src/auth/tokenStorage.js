@@ -1,12 +1,17 @@
-// Persists the refresh token and a cached copy of the user profile.
+// Session persistence.
 //
-// The short-lived access token is kept in memory only (Redux state), so it is
-// never written to storage. "Remember me" puts the refresh token in
-// localStorage (survives browser restarts); otherwise sessionStorage is used
-// and the session ends when the tab is closed.
+// The refresh token lives in an HttpOnly cookie set by the API, so page
+// scripts (and therefore XSS) can never read it. The short-lived access
+// token is kept in memory only (Redux state).
+//
+// This module only stores a non-secret hint that a session cookie probably
+// exists, so visitors who never signed in don't trigger a refresh request,
+// and so signing out in one tab can sign out the others.
 
-const REFRESH_KEY = "mds.refreshToken";
-const USER_KEY = "mds.user";
+const HINT_KEY = "mds.session";
+// Older builds kept the refresh token and profile in web storage.
+const LEGACY_REFRESH_KEY = "mds.refreshToken";
+const LEGACY_USER_KEY = "mds.user";
 
 function safe(fn, fallback = null) {
   try {
@@ -16,58 +21,48 @@ function safe(fn, fallback = null) {
   }
 }
 
-const stores = () => [
-  safe(() => window.localStorage),
-  safe(() => window.sessionStorage),
-].filter(Boolean);
+const local = () => safe(() => window.localStorage);
+const session = () => safe(() => window.sessionStorage);
 
-/** The storage that currently holds the session, if any. */
-function activeStore() {
-  return stores().find((s) => safe(() => s.getItem(REFRESH_KEY))) || null;
+export const sessionHint = {
+  has() {
+    return safe(() => local()?.getItem(HINT_KEY) === "1", false) || Boolean(peekLegacyRefreshToken());
+  },
+  mark() {
+    safe(() => local()?.setItem(HINT_KEY, "1"));
+  },
+  clear() {
+    safe(() => local()?.removeItem(HINT_KEY));
+    removeLegacy();
+  },
+  KEY: HINT_KEY,
+};
+
+function peekLegacyRefreshToken() {
+  for (const store of [local(), session()]) {
+    const token = safe(() => store?.getItem(LEGACY_REFRESH_KEY));
+    if (token) return token;
+  }
+  return null;
 }
 
-export const tokenStorage = {
-  save({ refreshToken, user }, remember) {
-    this.clear();
-    const store = remember ? safe(() => window.localStorage) : safe(() => window.sessionStorage);
-    if (!store) return;
+function removeLegacy() {
+  for (const store of [local(), session()]) {
     safe(() => {
-      store.setItem(REFRESH_KEY, refreshToken);
-      store.setItem(USER_KEY, JSON.stringify(user));
+      store?.removeItem(LEGACY_REFRESH_KEY);
+      store?.removeItem(LEGACY_USER_KEY);
     });
-  },
+  }
+}
 
-  /** Replace the refresh token after rotation, keeping the same storage. */
-  update({ refreshToken, user }) {
-    const store = activeStore() || safe(() => window.sessionStorage);
-    if (!store) return;
-    safe(() => {
-      if (refreshToken) store.setItem(REFRESH_KEY, refreshToken);
-      if (user) store.setItem(USER_KEY, JSON.stringify(user));
-    });
-  },
-
-  getRefreshToken() {
-    const store = activeStore();
-    return store ? safe(() => store.getItem(REFRESH_KEY)) : null;
-  },
-
-  getUser() {
-    const store = activeStore();
-    const raw = store ? safe(() => store.getItem(USER_KEY)) : null;
-    return raw ? safe(() => JSON.parse(raw)) : null;
-  },
-
-  clear() {
-    for (const s of stores()) {
-      safe(() => {
-        s.removeItem(REFRESH_KEY);
-        s.removeItem(USER_KEY);
-      });
-    }
-  },
-
-  REFRESH_KEY,
+/**
+ * A refresh token left in web storage by an older build, if any. Sent once
+ * so the server can move the session into the HttpOnly cookie; the stored
+ * copy is deleted after the first successful refresh.
+ */
+export const legacySession = {
+  token: peekLegacyRefreshToken,
+  clear: removeLegacy,
 };
 
 /** Remove credentials left behind by the previous (per-portal) login screens. */

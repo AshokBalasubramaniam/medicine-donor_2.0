@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -17,6 +17,26 @@ import { createOrder, verifyPayment } from '../../api';
 import { SORTS, displayName, fundedPct, initials, locationOf, medicinesOf, money, statusOf, toneOf } from './donorData';
 
 const PRESETS = [500, 1000, 2500, 5000];
+const RAZORPAY_SRC = 'https://checkout.razorpay.com/v1/checkout.js';
+
+/** Loads Razorpay checkout on first use instead of on every page. */
+let razorpayPromise;
+function loadRazorpay() {
+  if (window.Razorpay) return Promise.resolve(true);
+  razorpayPromise ??= new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = RAZORPAY_SRC;
+    script.async = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => {
+      razorpayPromise = undefined; // allow a retry
+      script.remove();
+      resolve(false);
+    };
+    document.head.appendChild(script);
+  });
+  return razorpayPromise;
+}
 
 function PatientPicker({ patients, onPick }) {
   const [q, setQ] = useState('');
@@ -68,6 +88,11 @@ export default function MakeDonation() {
   const [paying, setPaying] = useState(false);
   const [receipt, setReceipt] = useState(null);
 
+  // Fetch the checkout script in the background so "Donate" opens instantly.
+  useEffect(() => {
+    loadRazorpay();
+  }, []);
+
   const balance = Math.floor(Number(patient?.balance_amount) || 0);
   const value = Math.floor(Number(amount) || 0);
   const amountError =
@@ -83,14 +108,14 @@ export default function MakeDonation() {
   async function donate(e) {
     e.preventDefault();
     if (!patient || amountError || value < 1) return;
-    if (!window.Razorpay) {
-      toast.error('The payment gateway didn’t load. Check your connection and refresh the page.', 'Payment unavailable');
+    setPaying(true);
+    if (!(await loadRazorpay())) {
+      toast.error('The payment gateway didn’t load. Check your connection and try again.', 'Payment unavailable');
+      setPaying(false);
       return;
     }
-
-    setPaying(true);
     try {
-      const order = await createOrder(null, value, patient.id);
+      const order = await createOrder(value, patient.id);
       const rzp = new window.Razorpay({
         key: order.key_id,
         amount: order.amount,
@@ -107,15 +132,10 @@ export default function MakeDonation() {
         },
         handler: async (res) => {
           try {
-            await verifyPayment(null, {
+            await verifyPayment({
               razorpay_order_id: res.razorpay_order_id,
               razorpay_payment_id: res.razorpay_payment_id,
               razorpay_signature: res.razorpay_signature,
-              patient_id: patient.id,
-              patient_name: patient.name,
-              donor_id: user?.id || user?._id,
-              donor_name: user?.name,
-              amount: value,
             });
             setReceipt({ amount: value, paymentId: res.razorpay_payment_id, name: displayName(patient.name) });
             toast.success(`Thank you for supporting ${displayName(patient.name)}.`, 'Donation successful');

@@ -14,11 +14,6 @@ export const ROLE_HOME = Object.freeze({
   [ROLES.ADMIN]: "/admin/dashboard",
 });
 
-export const ROLE_LABEL = Object.freeze({
-  [ROLES.PATIENT]: "Patient",
-  [ROLES.DONOR]: "Donor",
-  [ROLES.ADMIN]: "Administrator",
-});
 
 export function homeFor(role) {
   return ROLE_HOME[role] || "/login";

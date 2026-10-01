@@ -1,7 +1,7 @@
 import { configureStore } from "@reduxjs/toolkit";
 import authReducer, { sessionCleared, tokenRefreshed } from "./authSlice";
 import { configureAuth } from "../api";
-import { tokenStorage } from "../auth/tokenStorage";
+import { sessionHint } from "../auth/tokenStorage";
 
 const store = configureStore({
   reducer: {
@@ -15,11 +15,11 @@ configureAuth({
   onExpired: () => store.dispatch(sessionCleared()),
 });
 
-// Logging out in one tab ends "remember me" sessions in the other tabs too.
+// Logging out in one tab ends the session in the other tabs too.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (
-      event.key === tokenStorage.REFRESH_KEY &&
+      event.key === sessionHint.KEY &&
       !event.newValue &&
       store.getState().auth.isAuthenticated
     ) {

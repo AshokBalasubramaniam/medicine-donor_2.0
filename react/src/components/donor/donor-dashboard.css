@@ -219,8 +219,7 @@
   height: 76px;
   padding: 0 32px;
   border-bottom: 1px solid #e5ece9;
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(14px);
+  background: rgba(255, 255, 255, 0.98);
 }
 
 .dn-top-search {
@@ -527,8 +526,7 @@
   padding: 12px 16px;
   border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 13px;
-  background: rgba(6, 46, 38, 0.85);
-  backdrop-filter: blur(9px);
+  background: rgba(6, 46, 38, 0.92);
 }
 
 .dn-impact-badge strong {
@@ -856,6 +854,12 @@
   background: #078b67;
   color: #fff;
   font-size: 13px;
+}
+
+.dn-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
 }
 
 .dn-empty {

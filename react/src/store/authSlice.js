@@ -1,24 +1,25 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import { authApi, refreshSession } from "../api";
-import { tokenStorage } from "../auth/tokenStorage";
+import { sessionHint } from "../auth/tokenStorage";
 
-// `token` is the in-memory access token. The name is kept because the
-// existing dashboard screens read `state.auth.token`.
-const storedRefresh = tokenStorage.getRefreshToken();
+// `token` is the in-memory access token; the refresh token is an HttpOnly
+// cookie the page can't read. The user profile comes from the server on
+// every page load (nothing personal is cached in storage).
+const mayHaveSession = sessionHint.has();
 
 const initialState = {
-  user: storedRefresh ? tokenStorage.getUser() : null,
+  user: null,
   token: null,
   isAuthenticated: false,
   // "checking" while an existing session is restored on page load.
-  status: storedRefresh ? "checking" : "ready",
+  status: mayHaveSession ? "checking" : "ready",
 };
 
-/** Restore the session on page load using the stored refresh token. */
+/** Restore the session on page load from the refresh cookie. */
 export const bootstrapSession = createAsyncThunk(
   "auth/bootstrap",
   async (_, { dispatch, getState }) => {
-    if (!tokenStorage.getRefreshToken()) {
+    if (!sessionHint.has()) {
       dispatch(sessionCleared());
       return;
     }
@@ -36,7 +37,7 @@ export const loginUser = createAsyncThunk(
   async ({ identifier, password, rememberMe }, { dispatch, rejectWithValue }) => {
     try {
       const data = await authApi.login({ identifier, password, rememberMe });
-      tokenStorage.save({ refreshToken: data.refreshToken, user: data.user }, rememberMe);
+      sessionHint.mark();
       dispatch(sessionStarted({ accessToken: data.accessToken, user: data.user }));
       return data.user;
     } catch (err) {
@@ -50,7 +51,7 @@ export const registerUser = createAsyncThunk(
   async (payload, { dispatch, rejectWithValue }) => {
     try {
       const data = await authApi.register(payload);
-      tokenStorage.save({ refreshToken: data.refreshToken, user: data.user }, false);
+      sessionHint.mark();
       dispatch(sessionStarted({ accessToken: data.accessToken, user: data.user }));
       return data.user;
     } catch (err) {
@@ -68,15 +69,13 @@ export const registerUser = createAsyncThunk(
  * that `dispatch(logout())` get the full logout behaviour.
  */
 export const logout = createAsyncThunk("auth/logout", async (_, { dispatch }) => {
-  const refreshToken = tokenStorage.getRefreshToken();
-  tokenStorage.clear();
+  sessionHint.clear();
   dispatch(sessionCleared());
-  if (refreshToken) {
-    try {
-      await authApi.logout(refreshToken);
-    } catch {
-      // The local session is gone either way.
-    }
+  try {
+    // Revokes the session server-side and clears the cookie.
+    await authApi.logout();
+  } catch {
+    // The local session is gone either way.
   }
 });
 
@@ -108,5 +107,3 @@ const authSlice = createSlice({
 export const { sessionStarted, tokenRefreshed, sessionCleared } = authSlice.actions;
 export default authSlice.reducer;
 
-export const selectAuth = (state) => state.auth;
-export const selectUser = (state) => state.auth.user;

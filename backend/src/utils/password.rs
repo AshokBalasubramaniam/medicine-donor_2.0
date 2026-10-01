@@ -17,3 +17,26 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, argon2::passw
         .verify_password(password.as_bytes(), &parsed_hash)
         .is_ok())
 }
+
+/// Argon2 is deliberately slow (tens of ms of CPU); run it off the async
+/// runtime so one login doesn't stall every other request on that thread.
+pub async fn hash_password_async(password: &str) -> anyhow::Result<String> {
+    let password = password.to_owned();
+    tokio::task::spawn_blocking(move || hash_password(&password))
+        .await?
+        .map_err(|e| anyhow::anyhow!("hashing failed: {e}"))
+}
+
+pub async fn verify_password_async(password: &str, hash: &str) -> bool {
+    let (password, hash) = (password.to_owned(), hash.to_owned());
+    tokio::task::spawn_blocking(move || verify_password(&password, &hash).unwrap_or(false))
+        .await
+        .unwrap_or(false)
+}
+
+/// A valid Argon2 hash of a random password, used to spend the same time on
+/// unknown accounts as on real ones (so timing doesn't reveal which exist).
+pub fn dummy_hash() -> &'static str {
+    static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DUMMY.get_or_init(|| hash_password(&uuid::Uuid::new_v4().to_string()).unwrap_or_default())
+}
